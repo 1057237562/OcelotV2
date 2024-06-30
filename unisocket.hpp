@@ -41,8 +41,8 @@ const int BUFFER_SIZE = 1500; // Default MTU size
 
 class Stream {
 public:
-    virtual int Input(std::string& buf) = 0;
-    virtual void Output(std::string& buf) = 0;
+    virtual int Input(std::string& buf) const = 0;
+    virtual void Output(std::string& buf) const = 0;
     virtual bool isClosed() = 0;
 };
 
@@ -95,7 +95,7 @@ public:
     }
 
     template <typename T>
-    TcpClient* read(T* val)
+    bool read(T* val) const
     {
         size_t bufsize = sizeof(T), ptr = 0;
         char buf[bufsize];
@@ -105,17 +105,17 @@ public:
         while (bufsize) {
             if (!ret) {
                 throw std::runtime_error("EOF");
-                return this;
+                return false;
             }
             ret = recv(socket_fd, buf + ptr, bufsize, 0);
             ptr += ret;
             bufsize -= ret;
         }
         memcpy(val, buf, ptr);
-        return this;
+        return true;
     }
 
-    TcpClient* read(std::string& str)
+    bool read(std::string& str) const
     {
         int bufsize, ptr = 0;
         read(&bufsize);
@@ -126,17 +126,17 @@ public:
         while (bufsize) {
             if (!ret) {
                 throw std::runtime_error("EOF");
-                return this;
+                return false;
             }
             ret = recv(socket_fd, buf + ptr, bufsize, 0);
             ptr += ret;
             bufsize -= ret;
         }
         str = std::string(buf, ptr);
-        return this;
+        return true;
     }
 
-    TcpClient* read(std::string& str, int len)
+    bool read(std::string& str, int len) const
     {
         int bufsize = len, ptr = 0;
         char buf[bufsize];
@@ -146,38 +146,35 @@ public:
         while (bufsize) {
             if (!ret) {
                 throw std::runtime_error("EOF");
-                return this;
+                return false;
             }
             ret = recv(socket_fd, buf + ptr, bufsize, 0);
             ptr += ret;
             bufsize -= ret;
         }
         str = std::string(buf, ptr);
-        return this;
+        return true;
     }
 
     template <typename T>
-    TcpClient* write(T* val)
+    void write(T* val) const
     {
         send(socket_fd, (const char*)val, sizeof(T), 0);
-        return this;
     }
 
-    TcpClient* write(std::string& str, int len)
+    void write(std::string& str, int len) const
     {
         send(socket_fd, str.c_str(), len, 0);
-        return this;
     }
 
-    TcpClient* write(std::string& str)
+    void write(std::string& str) const
     {
         int bufsize = str.size();
         write(&bufsize);
         send(socket_fd, str.c_str(), str.size(), 0);
-        return this;
     }
 
-    int Input(std::string& buf) override
+    int Input(std::string& buf) const override
     {
         buf.resize(BUFFER_SIZE);
         int ret = recv(socket_fd, buf.data(), BUFFER_SIZE, 0);
@@ -185,7 +182,7 @@ public:
         return ret;
     }
 
-    void Output(std::string& buf) override
+    void Output(std::string& buf) const override
     {
         send(socket_fd, buf.data(), buf.size(), 0);
     }
@@ -255,7 +252,7 @@ public:
         return ntohs(sin.sin_port);
     }
 
-    TcpClient accept()
+    TcpClient accept() const
     {
         SOCKET s_client;
         struct sockaddr_in client_addr;

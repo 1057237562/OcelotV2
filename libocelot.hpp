@@ -33,7 +33,80 @@ using namespace crypto;
 using namespace socks;
 
 typedef unsigned char byte;
-class OcelotClient : public Stream {
+
+class OcelotChannel : public Stream {
+protected:
+    TcpClient socket;
+    AES_CBC* aes;
+
+public:
+    OcelotChannel(TcpClient client, AES_CBC* aes)
+        : socket(client)
+        , aes(aes)
+    {
+    }
+
+    OcelotChannel* write(std::string& str)
+    {
+        int len = str.length();
+        string slen = string((char*)&len, 4);
+        slen = aes->encrypt(slen);
+        socket.write(slen, 16);
+        socket.write(str, len);
+        return this;
+    }
+
+    OcelotChannel* read(std::string& str)
+    {
+        byte header[16];
+        socket.read(&header);
+        string slen = string((char*)header, 16);
+        slen = aes->decrypt(slen);
+        int len;
+        memcpy(&len, slen.data(), 4);
+        std::string buf;
+        socket.read(buf, len);
+        str = aes->decrypt(buf);
+        return this;
+    }
+
+    int Input(std::string& buf) const override
+    {
+        try {
+            byte header[16];
+            socket.read(&header);
+            string slen = string((char*)header, 16);
+            slen = aes->decrypt(slen);
+            int len;
+            memcpy(&len, slen.data(), 4);
+            socket.read(buf, len);
+            buf = aes->decrypt(buf);
+        } catch (runtime_error _) {
+            return 0;
+        }
+        return buf.length();
+    }
+
+    void Output(std::string& buf) const override
+    {
+        std::string data = aes->encrypt(buf);
+
+        int len = data.length();
+        string slen = string((char*)&len, 4);
+        slen = aes->encrypt(slen);
+        socket.write(slen, 16);
+
+        socket.write(data, len);
+    }
+
+    bool isClosed() override
+    {
+        return socket.isClosed();
+    }
+};
+
+class OcelotClient {
+
 protected:
     TcpClient socket;
     string usertoken;
@@ -43,12 +116,6 @@ public:
     OcelotClient(TcpClient client, string user, string password)
         : socket(client)
         , usertoken(user + "\n" + password)
-    {
-    }
-
-    OcelotClient(TcpClient client, AES_CBC aes)
-        : socket(client)
-        , aes(aes)
     {
     }
 
@@ -75,67 +142,9 @@ public:
         iv = de.decrypt(response);
         aes = AES_CBC(key, iv);
     }
-
-    OcelotClient* write(std::string& str)
-    {
-        int len = str.length();
-        string slen = string((char*)&len, 4);
-        slen = aes.encrypt(slen);
-        socket.write(slen, 16);
-        socket.write(str, len);
-        return this;
-    }
-
-    OcelotClient* read(std::string& str)
-    {
-        byte header[16];
-        socket.read(&header);
-        string slen = string((char*)header, 16);
-        slen = aes.decrypt(slen);
-        int len;
-        memcpy(&len, slen.data(), 4);
-        std::string buf;
-        socket.read(buf, len);
-        str = aes.decrypt(buf);
-        return this;
-    }
-
-    int Input(std::string& buf) override
-    {
-        try {
-            byte header[16];
-            socket.read(&header);
-            string slen = string((char*)header, 16);
-            slen = aes.decrypt(slen);
-            int len;
-            memcpy(&len, slen.data(), 4);
-            socket.read(buf, len);
-            buf = aes.decrypt(buf);
-        } catch (runtime_error _) {
-            return 0;
-        }
-        return buf.length();
-    }
-
-    void Output(std::string& buf) override
-    {
-        std::string data = aes.encrypt(buf);
-
-        int len = data.length();
-        string slen = string((char*)&len, 4);
-        slen = aes.encrypt(slen);
-        socket.write(slen, 16);
-
-        socket.write(data, len);
-    }
-
-    bool isClosed() override
-    {
-        return socket.isClosed();
-    }
 };
 
-inline NetworkAddr parseAddr(OcelotClient client, string& buffer)
+inline NetworkAddr parseAddr(OcelotChannel client, string& buffer)
 {
     client.read(buffer);
     NetworkAddr res;
@@ -239,18 +248,18 @@ public:
                             client.close();
                             continue;
                         }
-                        auto session = sessions[token];
-                        TcpServer transmit("0.0.0.0", 0);
-                        int port = transmit.getPort();
+                        auto session = &sessions[token];
+                        TcpServer* transmit = new TcpServer("0.0.0.0", 0);
+                        int port = transmit->getPort();
                         string pstr = string((char*)&port, 4);
-                        pstr = session.rsa.encrypt(pstr);
+                        pstr = session->rsa.encrypt(pstr);
                         client.write(pstr);
 
-                        thread tr = thread([](TcpServer server, Session data) {
+                        thread tr = thread([=]() {
                             thread th;
                             try {
-                                TcpClient request = server.accept();
-                                OcelotClient ocelot = OcelotClient(request, data.aes);
+                                TcpClient request = transmit->accept();
+                                OcelotChannel ocelot = OcelotChannel(request, &session->aes);
                                 try {
                                     string buffer;
                                     auto addr = parseAddr(ocelot, buffer);
@@ -278,8 +287,9 @@ public:
                             }
                             if (th.joinable())
                                 th.join();
-                        },
-                            transmit, session);
+                            transmit->close();
+                            delete transmit;
+                        });
                         if (tr.joinable()) {
                             tr.detach();
                         }

@@ -40,8 +40,8 @@ inline std::string random_string(size_t length, unsigned int seed = 0)
 }
 class Crypto {
 public:
-    virtual std::string encrypt(std::string& in) = 0;
-    virtual std::string decrypt(std::string& in) = 0;
+    virtual std::string encrypt(std::string& in) const = 0;
+    virtual std::string decrypt(std::string& in) const = 0;
 };
 
 class SymmetricCrypto : public Crypto {
@@ -53,8 +53,8 @@ class AsymmetricCrypto : public Crypto {
 public:
     virtual void generateKey() = 0;
     virtual void fromPublicKey(std::string& key) = 0;
-    virtual std::string getPublicKey() = 0;
-    virtual std::string getPrivateKey() = 0;
+    virtual std::string getPublicKey() const = 0;
+    virtual std::string getPrivateKey() const = 0;
 };
 
 class ChaCha20 : public SymmetricCrypto {
@@ -82,7 +82,7 @@ public:
             this->iv[i] = dist(engine);
         }
     }
-    std::string encrypt(std::string& in) override
+    std::string encrypt(std::string& in) const override
     {
         std::string ciphertext;
         EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
@@ -116,7 +116,7 @@ public:
         return ciphertext;
     }
 
-    std::string decrypt(std::string& in) override
+    std::string decrypt(std::string& in) const override
     {
         std::string plaintext;
         EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
@@ -179,7 +179,7 @@ public:
             this->iv[i] = dist(engine);
         }
     }
-    std::string encrypt(std::string& in) override
+    std::string encrypt(std::string& in) const override
     {
         std::string ciphertext;
         EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
@@ -212,7 +212,7 @@ public:
         return ciphertext;
     }
 
-    std::string decrypt(std::string& in) override
+    std::string decrypt(std::string& in) const override
     {
         std::string plaintext;
         EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
@@ -300,7 +300,7 @@ public:
         BIO_free(bio);
     }
 
-    std::string getPublicKey() override
+    std::string getPublicKey() const override
     {
         BIO* bio = BIO_new(BIO_s_mem());
         if (!bio) {
@@ -317,7 +317,7 @@ public:
         return pubkey;
     }
 
-    std::string getX509PublicKey()
+    std::string getX509PublicKey() const
     {
         BIO* bio = BIO_new(BIO_s_mem());
         if (!bio) {
@@ -334,7 +334,7 @@ public:
         return pubkey;
     }
 
-    std::string getPrivateKey() override
+    std::string getPrivateKey() const override
     {
         BIO* bio = BIO_new(BIO_s_mem());
         if (!bio) {
@@ -351,7 +351,7 @@ public:
         return privkey;
     }
 
-    std::string encrypt(std::string& in) override
+    std::string encrypt(std::string& in) const override
     {
         std::string cipher;
         size_t outlen;
@@ -383,7 +383,7 @@ public:
         return cipher;
     }
 
-    std::string decrypt(std::string& in) override
+    std::string decrypt(std::string& in) const override
     {
         std::string plaintext;
         size_t outlen;
