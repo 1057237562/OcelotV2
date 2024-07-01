@@ -232,7 +232,7 @@ public:
                              << token << endl;
                     }
                 }
-                if (op == 1) {
+                if (op) {
                     try {
                         byte st = 0;
                         string token;
@@ -254,17 +254,20 @@ public:
                         string pstr = string((char*)&port, 4);
                         pstr = session->rsa.encrypt(pstr);
                         client.write(pstr);
+                        client.setNoDelay(true);
 
-                        thread tr = thread([=]() {
+                        thread tr = thread([](TcpServer* transmit, Session* session, bool fastmode) {
                             thread th;
                             try {
                                 TcpClient request = transmit->accept();
+                                request.setNoDelay(fastmode);
                                 OcelotChannel ocelot = OcelotChannel(request, &session->aes);
                                 try {
                                     string buffer;
                                     auto addr = parseAddr(ocelot, buffer);
                                     cout << "Fetch ip addr : " << addr.ip << " port :" << addr.port << endl;
                                     TcpClient target = TcpClient(addr.ip, addr.port);
+                                    target.setNoDelay(fastmode);
                                     target.Output(buffer);
                                     th = thread([&]() {
                                         try {
@@ -289,7 +292,8 @@ public:
                                 th.join();
                             transmit->close();
                             delete transmit;
-                        });
+                        },
+                            transmit, session, op == 2);
                         if (tr.joinable()) {
                             tr.detach();
                         }

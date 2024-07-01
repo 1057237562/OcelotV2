@@ -5,6 +5,7 @@
 #include <stdexcept>
 #include <stdio.h>
 #include <string>
+#define SOCKET_ERROR (-1)
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -27,12 +28,12 @@ inline void init()
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
 
 #define SOCKET int
-#define SOCKET_ERROR (-1)
 #define closesocket(x) ::close(x)
 #endif
 namespace unisocket {
@@ -92,6 +93,12 @@ public:
             throw std::runtime_error("Connect error !");
             return;
         }
+    }
+
+    bool setNoDelay(bool nodelay)
+    {
+        int ret = setsockopt(socket_fd, IPPROTO_TCP, TCP_NODELAY, (char*)&nodelay, sizeof(nodelay));
+        return ret != SOCKET_ERROR;
     }
 
     template <typename T>
