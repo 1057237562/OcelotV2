@@ -253,7 +253,6 @@ public:
                         int port = transmit->getPort();
                         string pstr = string((char*)&port, 4);
                         pstr = session->rsa.encrypt(pstr);
-                        client.setNoDelay(true);
                         client.write(pstr);
 
                         thread tr = thread([](TcpServer* transmit, Session* session, bool fastmode) {
