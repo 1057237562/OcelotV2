@@ -264,7 +264,9 @@ public:
                                 try {
                                     string buffer;
                                     auto addr = parseAddr(ocelot, buffer);
-                                    cout << "Fetch ip addr : " << addr.ip << " port :" << addr.port << endl;
+                                    cout << "Fetch ip addr : " << addr.ip << " port :" << addr.port;
+                                    if(fastmode) cout << " in fast mode" << endl;
+                                    cout<< endl;
                                     TcpClient target = TcpClient(addr.ip, addr.port);
                                     target.setNoDelay(fastmode);
                                     target.Output(buffer);
@@ -292,7 +294,7 @@ public:
                             transmit->close();
                             delete transmit;
                         },
-                            transmit, session, op == 2);
+                            transmit, session, (int)op == 2);
                         if (tr.joinable()) {
                             tr.detach();
                         }
