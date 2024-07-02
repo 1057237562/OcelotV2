@@ -46,20 +46,20 @@ public:
     {
     }
 
-    OcelotChannel* write(std::string& str)
+    void write(std::string& str)
     {
         int len = str.length();
         string slen = string((char*)&len, 4);
         slen = aes->encrypt(slen);
         socket.write(slen, 16);
         socket.write(str, len);
-        return this;
     }
 
-    OcelotChannel* read(std::string& str)
+    bool read(std::string& str)
     {
         byte header[16];
-        socket.read(&header);
+        if (!socket.read(&header))
+            return false;
         string slen = string((char*)header, 16);
         slen = aes->decrypt(slen);
         int len;
@@ -67,19 +67,21 @@ public:
         std::string buf;
         socket.read(buf, len);
         str = aes->decrypt(buf);
-        return this;
+        return true;
     }
 
     int Input(std::string& buf) const override
     {
         try {
             byte header[16];
-            socket.read(&header);
+            if (!socket.read(&header))
+                return 0;
             string slen = string((char*)header, 16);
             slen = aes->decrypt(slen);
             int len;
             memcpy(&len, slen.data(), 4);
-            socket.read(buf, len);
+            if (!socket.read(buf, len))
+                return 0;
             buf = aes->decrypt(buf);
         } catch (runtime_error _) {
             return 0;
@@ -146,8 +148,9 @@ public:
 
 inline NetworkAddr parseAddr(OcelotChannel client, string& buffer)
 {
-    client.read(buffer);
-    NetworkAddr res;
+    NetworkAddr res = { "", -1 };
+    if (!client.read(buffer))
+        return res;
     switch (buffer[3]) {
     case 0x01:
         buffer = buffer.substr(4);
@@ -205,18 +208,21 @@ public:
             auto client = server.accept();
             try {
                 char op;
-                client.read(&op);
+                if (!client.read(&op))
+                    continue;
                 if (op == 0) {
                     string pkey = de.getX509PublicKey();
                     client.write(pkey);
 
                     string key, iv;
                     RSA_PKCS1_OAEP en;
-                    client.read(pkey);
+                    if (!client.read(pkey))
+                        continue;
                     en.fromX509PublicKey(pkey);
 
                     string token;
-                    client.read(token);
+                    if (!client.read(token))
+                        continue;
                     token = de.decrypt(token);
                     token = token.substr(0, strlen(token.data()));
                     key = random_string(32 + 16), iv = key.substr(32, 16);
@@ -237,7 +243,8 @@ public:
                         byte st = 0;
                         string token;
                         try {
-                            client.read(token);
+                            if (!client.read(token))
+                                continue;
                             token = de.decrypt(token);
                             token = token.substr(0, strlen(token.data()));
                             st = 1;
@@ -264,6 +271,8 @@ public:
                                 try {
                                     string buffer;
                                     auto addr = parseAddr(ocelot, buffer);
+                                    if (addr.port == -1 && addr.ip == "")
+                                        return;
                                     cout << "Fetch ip addr : " << addr.ip << " port :" << addr.port << endl;
                                     TcpClient target = TcpClient(addr.ip, addr.port);
                                     target.setNoDelay(fastmode);

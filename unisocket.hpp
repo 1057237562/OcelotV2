@@ -102,7 +102,7 @@ public:
     }
 
     template <typename T>
-    bool read(T* val) const
+    int read(T* val) const
     {
         size_t bufsize = sizeof(T), ptr = 0;
         char buf[bufsize];
@@ -111,39 +111,38 @@ public:
         bufsize -= ret;
         while (bufsize) {
             if (!ret) {
-                throw std::runtime_error("EOF");
-                return false;
+                return 0;
             }
             ret = recv(socket_fd, buf + ptr, bufsize, 0);
             ptr += ret;
             bufsize -= ret;
         }
         memcpy(val, buf, ptr);
-        return true;
+        return ptr;
     }
 
-    bool read(std::string& str) const
+    int read(std::string& str) const
     {
         int bufsize, ptr = 0;
-        read(&bufsize);
+        if (!read(&bufsize))
+            return false;
         char buf[bufsize];
         int ret = recv(socket_fd, buf, bufsize, 0);
         ptr += ret;
         bufsize -= ret;
         while (bufsize) {
             if (!ret) {
-                throw std::runtime_error("EOF");
-                return false;
+                return 0;
             }
             ret = recv(socket_fd, buf + ptr, bufsize, 0);
             ptr += ret;
             bufsize -= ret;
         }
         str = std::string(buf, ptr);
-        return true;
+        return ptr;
     }
 
-    bool read(std::string& str, int len) const
+    int read(std::string& str, int len) const
     {
         int bufsize = len, ptr = 0;
         char buf[bufsize];
@@ -152,15 +151,14 @@ public:
         bufsize -= ret;
         while (bufsize) {
             if (!ret) {
-                throw std::runtime_error("EOF");
-                return false;
+                return 0;
             }
             ret = recv(socket_fd, buf + ptr, bufsize, 0);
             ptr += ret;
             bufsize -= ret;
         }
         str = std::string(buf, ptr);
-        return true;
+        return ptr;
     }
 
     template <typename T>
