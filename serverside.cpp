@@ -1,6 +1,6 @@
-#include "crypt"
-#include "libocelot"
-#include "unisocket"
+#include "crypt.hpp"
+#include "libocelot.hpp"
+#include "unisocket.hpp"
 #include <iostream>
 
 int main(void)
