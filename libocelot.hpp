@@ -277,6 +277,7 @@ public:
                             thread th;
                             try {
                                 TcpClient request = transmit->accept();
+                                transmit->close();
                                 request.setNoDelay(fastmode);
                                 OcelotChannel ocelot = OcelotChannel(request, &session->aes);
                                 try {
@@ -284,7 +285,6 @@ public:
                                     auto addr = parseAddr(ocelot, buffer);
                                     cout << "Fetch ip addr : " << addr.ip << " port :" << addr.port;
                                     if (addr.port == -1 && addr.ip == ""){
-                                        transmit->close();
                                         return;
                                     }
                                     if (fastmode)
@@ -314,7 +314,6 @@ public:
                             }
                             if (th.joinable())
                                 th.join();
-                            transmit->close();
                             delete transmit;
                         },
                             transmit, session, (int)op == 2);
