@@ -1,10 +1,12 @@
 #ifndef _UNISOCKET_HPP_
 #define _UNISOCKET_HPP_
 
+#include <algorithm>
 #include <iostream>
 #include <stdexcept>
 #include <stdio.h>
 #include <string>
+#include <vector>
 #define SOCKET_ERROR (-1)
 
 #ifdef _WIN32
@@ -131,8 +133,8 @@ public:
         int bufsize, ptr = 0;
         if (!read(&bufsize))
             return false;
-        char buf[bufsize];
-        int ret = recv(socket_fd, buf, bufsize, 0);
+        str.resize(std::min(bufsize, BUFFER_SIZE));
+        int ret = recv(socket_fd, str.data(), std::min(bufsize, BUFFER_SIZE), 0);
         ptr += ret;
         bufsize -= ret;
         while (bufsize) {
@@ -143,11 +145,11 @@ public:
                 closed = true;
                 return 0;
             }
-            ret = recv(socket_fd, buf + ptr, bufsize, 0);
+            str.resize(str.size() + std::min(bufsize, BUFFER_SIZE));
+            ret = recv(socket_fd, str.data() + ptr, std::min(bufsize, BUFFER_SIZE), 0);
             ptr += ret;
             bufsize -= ret;
         }
-        str = std::string(buf, ptr);
         return ptr;
     }
 

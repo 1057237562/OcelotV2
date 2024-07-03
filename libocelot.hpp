@@ -215,7 +215,8 @@ public:
                     continue;
                 if (!op) {
                     string pkey = de.getX509PublicKey();
-                    client.write(pkey);
+                    if (!client.write(pkey))
+                        continue;
 
                     string key, iv;
                     RSA_PKCS1_OAEP en;
@@ -233,8 +234,10 @@ public:
                     AES_CBC aes(key, iv);
                     string ekey = en.encrypt(key);
                     string eiv = en.encrypt(iv);
-                    client.write(ekey);
-                    client.write(eiv);
+                    if (!client.write(ekey))
+                        continue;
+                    if (!client.write(eiv))
+                        continue;
                     if (binary_search(tokens.begin(), tokens.end(), token)) {
                         sessions[token] = { en, aes };
                         cout << "Session established with" << endl
@@ -253,7 +256,8 @@ public:
                             st = 1;
                         } catch (...) {
                         }
-                        client.write(&st);
+                        if (!client.write(&st))
+                            continue;
                         if (sessions.find(token) == sessions.end()) {
                             client.close();
                             continue;
@@ -263,7 +267,8 @@ public:
                         int port = transmit->getPort();
                         string pstr = string((char*)&port, 4);
                         pstr = session->rsa.encrypt(pstr);
-                        client.write(pstr);
+                        if (!client.write(pstr))
+                            continue;
 
                         thread tr = thread([](TcpServer* transmit, Session* session, bool fastmode) {
                             thread th;
