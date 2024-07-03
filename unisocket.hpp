@@ -113,11 +113,8 @@ public:
         ptr += ret;
         bufsize -= ret;
         while (bufsize) {
-            if (!ret) {
-                return 0;
-            }
-            if (ret == -1) {
-                closed = true;
+            if (ret <= 0) {
+                close();
                 return 0;
             }
             ret = recv(socket_fd, buf + ptr, bufsize, 0);
@@ -138,11 +135,8 @@ public:
         ptr += ret;
         bufsize -= ret;
         while (bufsize) {
-            if (!ret) {
-                return 0;
-            }
-            if (ret == -1) {
-                closed = true;
+            if (ret <= 0) {
+                close();
                 return 0;
             }
             str.resize(str.size() + std::min(bufsize, BUFFER_SIZE));
@@ -155,17 +149,16 @@ public:
 
     int read(std::string& str, int len)
     {
+        if (!len)
+            return true;
         int bufsize = len, ptr = 0;
         char buf[bufsize];
         int ret = recv(socket_fd, buf, bufsize, 0);
         ptr += ret;
         bufsize -= ret;
         while (bufsize) {
-            if (!ret) {
-                return 0;
-            }
-            if (ret == -1) {
-                closed = true;
+            if (ret <= 0) {
+                close();
                 return 0;
             }
             ret = recv(socket_fd, buf + ptr, bufsize, 0);
@@ -184,11 +177,8 @@ public:
         bufsize -= ret;
         ptr += ret;
         while (bufsize) {
-            if (!ret) {
-                return false;
-            }
-            if (ret == -1) {
-                closed = true;
+            if (ret <= 0) {
+                close();
                 return false;
             }
             ret = send(socket_fd, (const char*)val + ptr, bufsize, 0);
@@ -200,16 +190,15 @@ public:
 
     bool write(std::string& str, int len)
     {
+        if (!len)
+            return true;
         int bufsize = len, ptr = 0;
         int ret = send(socket_fd, str.data(), bufsize, 0);
         bufsize -= ret;
         ptr += ret;
         while (bufsize) {
-            if (!ret) {
-                return false;
-            }
-            if (ret == -1) {
-                closed = true;
+            if (ret <= 0) {
+                close();
                 return false;
             }
             ret = send(socket_fd, str.data() + ptr, bufsize, 0);
@@ -229,11 +218,8 @@ public:
         bufsize -= ret;
         ptr += ret;
         while (bufsize) {
-            if (!ret) {
-                return false;
-            }
-            if (ret == -1) {
-                closed = true;
+            if (ret <= 0) {
+                close();
                 return false;
             }
             ret = send(socket_fd, str.data() + ptr, bufsize, 0);
