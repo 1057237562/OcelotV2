@@ -70,7 +70,7 @@ public:
         return true;
     }
 
-    int Input(std::string& buf) const override
+    int Input(std::string& buf) override
     {
         try {
             byte header[16];
@@ -89,7 +89,7 @@ public:
         return buf.length();
     }
 
-    void Output(std::string& buf) const override
+    void Output(std::string& buf) override
     {
         std::string data = aes->encrypt(buf);
 
@@ -188,13 +188,13 @@ protected:
         RSA_PKCS1_OAEP rsa;
         AES_CBC aes;
     };
-    unisocket::TcpServer server;
+    unisocket::TcpServer* server;
     vector<string> tokens;
     map<string, Session> sessions;
     RSA_PKCS1_OAEP de;
 
 public:
-    OcelotServer(unisocket::TcpServer server, vector<string> tks)
+    OcelotServer(unisocket::TcpServer* server, vector<string> tks)
         : server(server)
         , tokens(tks)
     {
@@ -205,7 +205,7 @@ public:
     void start()
     {
         while (true) {
-            auto client = server.accept();
+            auto client = server->accept();
             try {
                 char op;
                 if (!client.read(&op))

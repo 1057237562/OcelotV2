@@ -1,6 +1,7 @@
 #ifndef _UNISOCKET_HPP_
 #define _UNISOCKET_HPP_
 
+#include <atomic>
 #include <iostream>
 #include <stdexcept>
 #include <stdio.h>
@@ -42,15 +43,15 @@ const int BUFFER_SIZE = 1500; // Default MTU size
 
 class Stream {
 public:
-    virtual int Input(std::string& buf) const = 0;
-    virtual void Output(std::string& buf) const = 0;
+    virtual int Input(std::string& buf) = 0;
+    virtual void Output(std::string& buf) = 0;
     virtual bool isClosed() = 0;
 };
 
 inline void copyTo(Stream* src, Stream* dest)
 {
     std::string buf;
-    while (!dest->isClosed() && src->Input(buf)) {
+    while (!dest->isClosed() && !src->isClosed() && src->Input(buf)) {
         dest->Output(buf);
         buf.clear();
     }
@@ -102,7 +103,7 @@ public:
     }
 
     template <typename T>
-    int read(T* val) const
+    int read(T* val)
     {
         size_t bufsize = sizeof(T), ptr = 0;
         char buf[bufsize];
@@ -111,6 +112,8 @@ public:
         bufsize -= ret;
         while (bufsize) {
             if (!ret) {
+                closed = true;
+                closesocket(socket_fd);
                 return 0;
             }
             ret = recv(socket_fd, buf + ptr, bufsize, 0);
@@ -121,7 +124,7 @@ public:
         return ptr;
     }
 
-    int read(std::string& str) const
+    int read(std::string& str)
     {
         int bufsize, ptr = 0;
         if (!read(&bufsize))
@@ -132,6 +135,8 @@ public:
         bufsize -= ret;
         while (bufsize) {
             if (!ret) {
+                closed = true;
+                closesocket(socket_fd);
                 return 0;
             }
             ret = recv(socket_fd, buf + ptr, bufsize, 0);
@@ -142,7 +147,7 @@ public:
         return ptr;
     }
 
-    int read(std::string& str, int len) const
+    int read(std::string& str, int len)
     {
         int bufsize = len, ptr = 0;
         char buf[bufsize];
@@ -151,6 +156,8 @@ public:
         bufsize -= ret;
         while (bufsize) {
             if (!ret) {
+                closed = true;
+                closesocket(socket_fd);
                 return 0;
             }
             ret = recv(socket_fd, buf + ptr, bufsize, 0);
@@ -179,15 +186,19 @@ public:
         send(socket_fd, str.c_str(), str.size(), 0);
     }
 
-    int Input(std::string& buf) const override
+    int Input(std::string& buf) override
     {
         buf.resize(BUFFER_SIZE);
         int ret = recv(socket_fd, buf.data(), BUFFER_SIZE, 0);
         buf.resize(ret);
+        if (!ret) {
+            closed = true;
+            closesocket(socket_fd);
+        }
         return ret;
     }
 
-    void Output(std::string& buf) const override
+    void Output(std::string& buf) override
     {
         send(socket_fd, buf.data(), buf.size(), 0);
     }
