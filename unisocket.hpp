@@ -14,20 +14,9 @@
 #include <ws2tcpip.h>
 
 #pragma comment(lib, "ws2_32.lib")
-namespace unisocket {
-inline void init()
-{
-    WORD sockVersion = MAKEWORD(2, 2);
-    WSADATA wsaData;
-
-    if (WSAStartup(sockVersion, &wsaData)) {
-        throw std::runtime_error("Cannot startup WSA!");
-        return;
-    }
-}
-}
 #else
 #include <arpa/inet.h>
+#include <errno.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -39,17 +28,44 @@ inline void init()
 #define closesocket(x) ::close(x)
 #endif
 namespace unisocket {
+static bool initialized = false;
+inline void init()
+{
+    if (!initialized) {
+        initialized = true;
+#ifdef _WIN32
+        WORD sockVersion = MAKEWORD(2, 2);
+        WSADATA wsaData;
+
+        if (WSAStartup(sockVersion, &wsaData)) {
+            throw std::runtime_error("Cannot startup WSA!");
+            return;
+        }
+#endif
+    }
+}
+
+inline int getErrorCode()
+{
+#ifdef _WIN32
+    return WSAGetLastError();
+#else
+    return errno;
+#endif
+}
+
 const int BACKLOG = 2;
 const int BUFFER_SIZE = 1500; // Default MTU size
 
-class Stream {
+class NetworkStream {
 public:
+    NetworkStream() { init(); }
     virtual int Input(std::string& buf) = 0;
     virtual bool Output(std::string& buf) = 0;
     virtual bool isClosed() = 0;
 };
 
-inline void copyTo(Stream* src, Stream* dest)
+inline void copyTo(NetworkStream* src, NetworkStream* dest)
 {
     std::string buf;
     while (!dest->isClosed() && !src->isClosed() && src->Input(buf)) {
@@ -59,7 +75,7 @@ inline void copyTo(Stream* src, Stream* dest)
     }
 }
 
-class TcpClient : public Stream {
+class TcpClient : public NetworkStream {
     SOCKET socket_fd;
     sockaddr_in addr;
     bool closed = false;

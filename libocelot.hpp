@@ -34,7 +34,7 @@ using namespace socks;
 
 typedef unsigned char byte;
 
-class OcelotChannel : public Stream {
+class OcelotChannel : public NetworkStream {
 protected:
     TcpClient socket;
     AES_CBC* aes;
