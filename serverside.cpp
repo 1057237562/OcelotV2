@@ -4,13 +4,22 @@
 #include <fstream>
 #include <iostream>
 
-int main(void)
+int main(int c,char** argv)
 {
     using namespace unisocket;
     using namespace std;
     using namespace crypto;
+    string cfgpath = "./cfg";
+    for(int i = 0; i < c; i ++){
+        string arg = string(argv[i],strlen(argv[i]));
+        if(arg == "-cfg"){
+            cfgpath = string(argv[i+1],strlen(argv[i+1]));
+            ++i;
+        }
+    }
+
     ifstream config;
-    config.open("./cfg");
+    config.open(cfgpath);
     int cnt;
     config >> cnt;
     vector<string> tokens(cnt);
