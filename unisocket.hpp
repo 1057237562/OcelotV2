@@ -42,16 +42,17 @@ const int BUFFER_SIZE = 1500; // Default MTU size
 
 class Stream {
 public:
-    virtual int Input(std::string& buf) const = 0;
-    virtual void Output(std::string& buf) const = 0;
+    virtual int Input(std::string& buf) = 0;
+    virtual bool Output(std::string& buf) = 0;
     virtual bool isClosed() = 0;
 };
 
 inline void copyTo(Stream* src, Stream* dest)
 {
     std::string buf;
-    while (!dest->isClosed() && src->Input(buf)) {
-        dest->Output(buf);
+    while (!dest->isClosed() && !src->isClosed() && src->Input(buf)) {
+        if (!dest->Output(buf))
+            break;
         buf.clear();
     }
 }
@@ -102,7 +103,7 @@ public:
     }
 
     template <typename T>
-    int read(T* val) const
+    int read(T* val)
     {
         size_t bufsize = sizeof(T), ptr = 0;
         char buf[bufsize];
@@ -113,6 +114,10 @@ public:
             if (!ret) {
                 return 0;
             }
+            if (ret == -1) {
+                closed = true;
+                return 0;
+            }
             ret = recv(socket_fd, buf + ptr, bufsize, 0);
             ptr += ret;
             bufsize -= ret;
@@ -121,7 +126,7 @@ public:
         return ptr;
     }
 
-    int read(std::string& str) const
+    int read(std::string& str)
     {
         int bufsize, ptr = 0;
         if (!read(&bufsize))
@@ -134,6 +139,10 @@ public:
             if (!ret) {
                 return 0;
             }
+            if (ret == -1) {
+                closed = true;
+                return 0;
+            }
             ret = recv(socket_fd, buf + ptr, bufsize, 0);
             ptr += ret;
             bufsize -= ret;
@@ -142,7 +151,7 @@ public:
         return ptr;
     }
 
-    int read(std::string& str, int len) const
+    int read(std::string& str, int len)
     {
         int bufsize = len, ptr = 0;
         char buf[bufsize];
@@ -151,6 +160,10 @@ public:
         bufsize -= ret;
         while (bufsize) {
             if (!ret) {
+                return 0;
+            }
+            if (ret == -1) {
+                closed = true;
                 return 0;
             }
             ret = recv(socket_fd, buf + ptr, bufsize, 0);
@@ -162,24 +175,73 @@ public:
     }
 
     template <typename T>
-    void write(T* val) const
+    bool write(T* val)
     {
-        send(socket_fd, (const char*)val, sizeof(T), 0);
+        int bufsize = sizeof(T), ptr = 0;
+        int ret = send(socket_fd, (const char*)val, bufsize, 0);
+        bufsize -= ret;
+        ptr += ret;
+        while (bufsize) {
+            if (!ret) {
+                return 0;
+            }
+            if (ret == -1) {
+                closed = true;
+                return 0;
+            }
+            ret = send(socket_fd, (const char*)val + ptr, bufsize, 0);
+            bufsize -= ret;
+            ptr += ret;
+        }
+        return true;
     }
 
-    void write(std::string& str, int len) const
+    bool write(std::string& str, int len)
     {
-        send(socket_fd, str.c_str(), len, 0);
+        int bufsize = len, ptr = 0;
+        int ret = send(socket_fd, str.data(), bufsize, 0);
+        bufsize -= ret;
+        ptr += ret;
+        while (bufsize) {
+            if (!ret) {
+                return false;
+            }
+            if (ret == -1) {
+                closed = true;
+                return false;
+            }
+            ret = send(socket_fd, str.data() + ptr, bufsize, 0);
+            bufsize -= ret;
+            ptr += ret;
+        }
+        return true;
     }
 
-    void write(std::string& str) const
+    bool write(std::string& str)
     {
-        int bufsize = str.size();
-        write(&bufsize);
-        send(socket_fd, str.c_str(), str.size(), 0);
+        int bufsize = str.size(), ptr = 0;
+        if (!write(&bufsize))
+            return false;
+
+        int ret = send(socket_fd, str.data(), bufsize, 0);
+        bufsize -= ret;
+        ptr += ret;
+        while (bufsize) {
+            if (!ret) {
+                return false;
+            }
+            if (ret == -1) {
+                closed = true;
+                return false;
+            }
+            ret = send(socket_fd, str.data() + ptr, bufsize, 0);
+            bufsize -= ret;
+            ptr += ret;
+        }
+        return true;
     }
 
-    int Input(std::string& buf) const override
+    int Input(std::string& buf) override
     {
         buf.resize(BUFFER_SIZE);
         int ret = recv(socket_fd, buf.data(), BUFFER_SIZE, 0);
@@ -187,9 +249,9 @@ public:
         return ret;
     }
 
-    void Output(std::string& buf) const override
+    bool Output(std::string& buf) override
     {
-        send(socket_fd, buf.data(), buf.size(), 0);
+        return write(buf, buf.size());
     }
 
     void close()

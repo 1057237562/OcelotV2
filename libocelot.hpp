@@ -70,7 +70,7 @@ public:
         return true;
     }
 
-    int Input(std::string& buf) const override
+    int Input(std::string& buf) override
     {
         try {
             byte header[16];
@@ -89,16 +89,18 @@ public:
         return buf.length();
     }
 
-    void Output(std::string& buf) const override
+    bool Output(std::string& buf) override
     {
         std::string data = aes->encrypt(buf);
 
         int len = data.length();
         string slen = string((char*)&len, 4);
         slen = aes->encrypt(slen);
-        socket.write(slen, 16);
+        if (!socket.write(slen, 16))
+            return false;
 
-        socket.write(data, len);
+        if (!socket.write(data, len))
+            return false;
     }
 
     bool isClosed() override
