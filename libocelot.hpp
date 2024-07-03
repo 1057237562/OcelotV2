@@ -255,6 +255,7 @@ public:
                             token = token.substr(0, strlen(token.data()));
                             st = 1;
                         } catch (...) {
+                            std::cout<<"Failed in certificate"<<endl;
                         }
                         if (!client.write(&st))
                             continue;
