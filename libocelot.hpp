@@ -268,8 +268,10 @@ public:
                         int port = transmit->getPort();
                         string pstr = string((char*)&port, 4);
                         pstr = session->rsa.encrypt(pstr);
-                        if (!client.write(pstr))
+                        if (!client.write(pstr)){
+                            transmit->close();
                             continue;
+                        }
 
                         thread tr = thread([](TcpServer* transmit, Session* session, bool fastmode) {
                             thread th;
@@ -281,8 +283,10 @@ public:
                                     string buffer;
                                     auto addr = parseAddr(ocelot, buffer);
                                     cout << "Fetch ip addr : " << addr.ip << " port :" << addr.port;
-                                    if (addr.port == -1 && addr.ip == "")
+                                    if (addr.port == -1 && addr.ip == ""){
+                                        transmit->close();
                                         return;
+                                    }
                                     if (fastmode)
                                         cout << " in fast mode" << endl;
                                     cout << endl;
