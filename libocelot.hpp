@@ -101,6 +101,7 @@ public:
 
         if (!socket.write(data, len))
             return false;
+        return true;
     }
 
     bool isClosed() override
