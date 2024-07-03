@@ -245,18 +245,21 @@ public:
                         AES_CBC aes(key, iv);
                         string ekey = en.encrypt(key);
                         string eiv = en.encrypt(iv);
-                        if (!client.write(ekey)) {
-                            client.close();
-                            return;
-                        }
-                        if (!client.write(eiv)) {
-                            client.close();
-                            return;
-                        }
                         if (binary_search(tokens.begin(), tokens.end(), token)) {
                             sessions[token] = { en, aes };
                             cout << "Session established with" << endl
                                  << token << endl;
+                            if (!client.write(ekey)) {
+                                client.close();
+                                return;
+                            }
+                            if (!client.write(eiv)) {
+                                client.close();
+                                return;
+                            }
+                        } else {
+                            int st = 0;
+                            client.write(&st);
                         }
 
                         client.close();
