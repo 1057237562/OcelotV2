@@ -183,11 +183,11 @@ public:
         ptr += ret;
         while (bufsize) {
             if (!ret) {
-                return 0;
+                return false;
             }
             if (ret == -1) {
                 closed = true;
-                return 0;
+                return false;
             }
             ret = send(socket_fd, (const char*)val + ptr, bufsize, 0);
             bufsize -= ret;
