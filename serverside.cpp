@@ -10,7 +10,7 @@ int main(void)
     using namespace std;
     using namespace crypto;
     ifstream config;
-    config.open("cfg");
+    config.open("./cfg");
     int cnt;
     config >> cnt;
     vector<string> tokens(cnt);
@@ -19,6 +19,8 @@ int main(void)
         config >> username >> password;
         tokens[i] = username + "\n" + password;
     }
+
+    config.close();
 
     TcpServer server = TcpServer("0.0.0.0", 3060);
     ocelot::OcelotServer ocelot = ocelot::OcelotServer(server, tokens);
