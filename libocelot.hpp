@@ -258,6 +258,8 @@ public:
                             cout << "Session established with" << endl
                                  << token << endl;
                         }
+
+                        client.close();
                     }
                     if (op) {
                         try {
@@ -273,6 +275,8 @@ public:
                                 st = 1;
                             } catch (...) {
                                 std::cout << "Failed in certificate" << endl;
+                                client.close();
+                                return;
                             }
                             if (!client.write(&st)) {
                                 client.close();
@@ -289,65 +293,59 @@ public:
                             pstr = session->rsa.encrypt(pstr);
                             if (!client.write(pstr)) {
                                 transmit->close();
-                                client.close();
                                 return;
                             }
-
-                            thread tr = thread([](TcpServer* transmit, Session* session, bool fastmode) {
-                                thread th;
+                            client.close();
+                            bool fastmode = int(op) == 2;
+                            thread th;
+                            try {
+                                TcpClient request = transmit->accept(5);
+                                transmit->close();
+                                request.setNoDelay(fastmode);
+                                OcelotChannel ocelot = OcelotChannel(request, &session->aes);
                                 try {
-                                    TcpClient request = transmit->accept(5);
-                                    transmit->close();
-                                    request.setNoDelay(fastmode);
-                                    OcelotChannel ocelot = OcelotChannel(request, &session->aes);
-                                    try {
-                                        string buffer;
-                                        auto addr = parseAddr(ocelot, buffer);
-                                        cout << "Fetch ip addr : " << addr.ip << " port :" << addr.port;
-                                        if (addr.port == -1 && addr.ip == "") {
-                                            return;
-                                        }
-                                        if (fastmode)
-                                            cout << " in fast mode" << endl;
-                                        cout << endl;
-                                        TcpClient target = TcpClient(addr.ip, addr.port);
-                                        target.setNoDelay(fastmode);
-                                        target.Output(buffer);
-                                        th = thread([&]() {
-                                            try {
-                                                copyTo(&ocelot, &target);
-                                            } catch (runtime_error _) {
-                                            }
-                                            target.close();
-                                        });
+                                    string buffer;
+                                    auto addr = parseAddr(ocelot, buffer);
+                                    cout << "Fetch ip addr : " << addr.ip << " port :" << addr.port;
+                                    if (addr.port == -1 && addr.ip == "") {
+                                        return;
+                                    }
+                                    if (fastmode)
+                                        cout << " in fast mode" << endl;
+                                    cout << endl;
+                                    TcpClient target = TcpClient(addr.ip, addr.port);
+                                    target.setNoDelay(fastmode);
+                                    target.Output(buffer);
+                                    th = thread([&]() {
                                         try {
-                                            copyTo(&target, &ocelot);
+                                            copyTo(&ocelot, &target);
                                         } catch (runtime_error _) {
                                         }
-                                        request.close();
-                                        cout << "Connection to " << addr.ip << ":" << addr.port << " closed" << endl;
-                                    } catch (...) {
-                                        cout << "Connection shut unexpectedly!" << endl;
+                                        target.close();
+                                    });
+                                    try {
+                                        copyTo(&target, &ocelot);
+                                    } catch (runtime_error _) {
                                     }
+                                    request.close();
+                                    cout << "Connection to " << addr.ip << ":" << addr.port << " closed" << endl;
                                 } catch (...) {
                                     cout << "Connection shut unexpectedly!" << endl;
                                 }
-                                if (th.joinable())
-                                    th.join();
-                                delete transmit;
-                            },
-                                transmit, session, (int)op == 2);
-                            if (tr.joinable()) {
-                                tr.detach();
+                            } catch (...) {
+                                cout << "Connection shut unexpectedly!" << endl;
                             }
+                            if (th.joinable())
+                                th.join();
+                            delete transmit;
                         } catch (...) {
+                            client.close();
                             cout << "Request link handshake failed!" << endl;
                         }
                     }
                 } catch (...) {
                     cout << "Client closed without sending any message!" << endl;
                 }
-                client.close();
             },
                 client);
             if (handler.joinable())
