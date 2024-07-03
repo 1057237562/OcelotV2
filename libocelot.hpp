@@ -255,7 +255,7 @@ public:
                             token = token.substr(0, strlen(token.data()));
                             st = 1;
                         } catch (...) {
-                            std::cout<<"Failed in certificate"<<endl;
+                            std::cout << "Failed in certificate" << endl;
                         }
                         if (!client.write(&st))
                             continue;
@@ -268,7 +268,7 @@ public:
                         int port = transmit->getPort();
                         string pstr = string((char*)&port, 4);
                         pstr = session->rsa.encrypt(pstr);
-                        if (!client.write(pstr)){
+                        if (!client.write(pstr)) {
                             transmit->close();
                             continue;
                         }
@@ -276,7 +276,7 @@ public:
                         thread tr = thread([](TcpServer* transmit, Session* session, bool fastmode) {
                             thread th;
                             try {
-                                TcpClient request = transmit->accept();
+                                TcpClient request = transmit->accept(5);
                                 transmit->close();
                                 request.setNoDelay(fastmode);
                                 OcelotChannel ocelot = OcelotChannel(request, &session->aes);
@@ -284,7 +284,7 @@ public:
                                     string buffer;
                                     auto addr = parseAddr(ocelot, buffer);
                                     cout << "Fetch ip addr : " << addr.ip << " port :" << addr.port;
-                                    if (addr.port == -1 && addr.ip == ""){
+                                    if (addr.port == -1 && addr.ip == "") {
                                         return;
                                     }
                                     if (fastmode)

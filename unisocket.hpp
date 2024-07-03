@@ -81,6 +81,7 @@ class TcpClient : public NetworkStream {
     bool closed = false;
 
 public:
+    TcpClient() { closed = true; }
     TcpClient(SOCKET socket_fd, sockaddr_in addr)
     {
         this->socket_fd = socket_fd;
@@ -323,8 +324,24 @@ public:
         return ntohs(sin.sin_port);
     }
 
-    TcpClient accept() const
+    TcpClient accept(int timeout = 0) const
     {
+        if (timeout) {
+            fd_set fds;
+            FD_ZERO(&fds);
+            FD_SET(socket_fd, &fds);
+            timeval tv;
+            tv.tv_sec = timeout;
+            tv.tv_usec = 0;
+            int ret = select(socket_fd + 1, &fds, NULL, NULL, &tv);
+            if (ret == 0) {
+                return TcpClient();
+            } else if (ret == -1) {
+                throw std::runtime_error("select error");
+                return TcpClient();
+            }
+        }
+
         SOCKET s_client;
         struct sockaddr_in client_addr;
         socklen_t addr_len = sizeof(sockaddr_in);
