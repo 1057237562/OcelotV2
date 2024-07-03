@@ -209,6 +209,8 @@ public:
     {
         while (true) {
             auto client = server.accept();
+            client.setRecvTimeout(5);
+            client.setSendTimeout(5);
             try {
                 char op;
                 if (!client.read(&op))

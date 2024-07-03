@@ -88,6 +88,22 @@ public:
         this->addr = addr;
     }
 
+    void setSendTimeout(int timeout = 5)
+    {
+        timeval tv;
+        tv.tv_sec = timeout;
+        tv.tv_usec = 0;
+        setsockopt(socket_fd, SOL_SOCKET, SO_SNDTIMEO, (char*)&tv, sizeof(tv));
+    }
+
+    void setRecvTimeout(int timeout = 5)
+    {
+        timeval tv;
+        tv.tv_sec = timeout;
+        tv.tv_usec = 0;
+        setsockopt(socket_fd, SOL_SOCKET, SO_RCVTIMEO, (char*)&tv, sizeof(tv));
+    }
+
     TcpClient(const std::string ip, const int port)
     {
         socket_fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
