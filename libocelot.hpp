@@ -33,11 +33,11 @@ typedef unsigned char byte;
 
 class OcelotChannel : public NetworkStream {
 protected:
-    shared_ptr<TcpClient> socket;
+    TcpClient* socket;
     AES_CBC* aes;
 
 public:
-    OcelotChannel(shared_ptr<TcpClient> client, AES_CBC* aes)
+    OcelotChannel(TcpClient* client, AES_CBC* aes)
         : socket(client)
         , aes(aes)
     {
@@ -111,12 +111,12 @@ public:
 class OcelotClient {
 
 protected:
-    shared_ptr<TcpClient> socket;
+    TcpClient* socket;
     string usertoken;
     AES_CBC aes;
 
 public:
-    OcelotClient(shared_ptr<TcpClient> client, string user, string password)
+    OcelotClient(TcpClient* client, string user, string password)
         : socket(client)
         , usertoken(user + "\n" + password)
     {
@@ -206,7 +206,7 @@ public:
     void start()
     {
         while (true) {
-            auto client = server.accept();
+            auto client = shared_ptr<TcpClient>(server.accept());
             client->setRecvTimeout(5);
             client->setSendTimeout(5);
             thread handler = thread([&](auto client) {
@@ -259,7 +259,6 @@ public:
                             int st = 0;
                             client->write(&st);
                         }
-
                         client->close();
                     }
                     if (op) {
@@ -333,8 +332,9 @@ public:
                                 } catch (...) {
                                     cout << "Connection shut unexpectedly!" << endl;
                                 }
+                                delete request;
                             } catch (...) {
-                                cout << "Connection shut unexpectedly!" << endl;
+                                cout << "Failed to establish connection!" << endl;
                             }
                             if (th.joinable())
                                 th.join();

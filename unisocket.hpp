@@ -344,7 +344,7 @@ public:
         return ntohs(sin.sin_port);
     }
 
-    std::shared_ptr<TcpClient> accept(int timeout = 0) const
+    TcpClient* accept(int timeout = 0) const
     {
         if (timeout) {
             fd_set fds;
@@ -355,10 +355,10 @@ public:
             tv.tv_usec = 0;
             int ret = select(socket_fd + 1, &fds, NULL, NULL, &tv);
             if (ret == 0) {
-                return std::shared_ptr<TcpClient>(new TcpClient());
+                return new TcpClient();
             } else if (ret == -1) {
                 throw std::runtime_error("select error");
-                return std::shared_ptr<TcpClient>(new TcpClient());
+                return new TcpClient();
             }
         }
 
@@ -366,7 +366,7 @@ public:
         struct sockaddr_in client_addr;
         socklen_t addr_len = sizeof(sockaddr_in);
         s_client = ::accept(socket_fd, (sockaddr*)&client_addr, &addr_len);
-        return std::shared_ptr<TcpClient>(new TcpClient(s_client, client_addr));
+        return new TcpClient(s_client, client_addr);
     }
 
     void close()
