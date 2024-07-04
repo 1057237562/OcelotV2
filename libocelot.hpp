@@ -124,24 +124,24 @@ public:
 
     void handshake()
     {
-        socket.write(&"");
+        socket->write(&"");
         string key, iv;
-        socket.read(key);
+        socket->read(key);
         RSA_PKCS1_OAEP en;
         en.fromX509PublicKey(key);
 
         RSA_PKCS1_OAEP de;
         de.generateKey();
         string pkey = de.getX509PublicKey();
-        socket.read(pkey);
+        socket->read(pkey);
 
         string token = en.encrypt(usertoken);
-        socket.write(token);
+        socket->write(token);
 
         string response;
-        socket.read(response);
+        socket->read(response);
         key = de.decrypt(response);
-        socket.read(response);
+        socket->read(response);
         iv = de.decrypt(response);
         aes = AES_CBC(key, iv);
     }
