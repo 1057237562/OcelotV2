@@ -111,12 +111,12 @@ public:
 class OcelotClient {
 
 protected:
-    TcpClient& socket;
+    shared_ptr<TcpClient> socket;
     string usertoken;
     AES_CBC aes;
 
 public:
-    OcelotClient(TcpClient& client, string user, string password)
+    OcelotClient(shared_ptr<TcpClient> client, string user, string password)
         : socket(client)
         , usertoken(user + "\n" + password)
     {
@@ -124,24 +124,24 @@ public:
 
     void handshake()
     {
-        socket.write(&"");
+        socket->write(&"");
         string key, iv;
-        socket.read(key);
+        socket->read(key);
         RSA_PKCS1_OAEP en;
         en.fromX509PublicKey(key);
 
         RSA_PKCS1_OAEP de;
         de.generateKey();
         string pkey = de.getX509PublicKey();
-        socket.read(pkey);
+        socket->read(pkey);
 
         string token = en.encrypt(usertoken);
-        socket.write(token);
+        socket->write(token);
 
         string response;
-        socket.read(response);
+        socket->read(response);
         key = de.decrypt(response);
-        socket.read(response);
+        socket->read(response);
         iv = de.decrypt(response);
         aes = AES_CBC(key, iv);
     }
@@ -312,7 +312,7 @@ public:
                                     if (fastmode)
                                         cout << " in fast mode" << endl;
                                     cout << endl;
-                                    TcpClient target = TcpClient(addr.ip, addr.port);
+                                    TcpClient target(addr.ip, addr.port);
                                     target.setNoDelay(fastmode);
                                     target.Output(buffer);
                                     th = thread([&]() {
