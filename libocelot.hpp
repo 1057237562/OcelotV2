@@ -276,10 +276,8 @@ public:
                                 st = 1;
                             } catch (...) {
                                 std::cout << "Failed in certificate" << endl;
-                                client->close();
-                                return;
                             }
-                            if (!client->write(&st)) {
+                            if (!client->write(&st) || !st) {
                                 client->close();
                                 return;
                             }
