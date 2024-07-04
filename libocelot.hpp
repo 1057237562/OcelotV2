@@ -111,12 +111,12 @@ public:
 class OcelotClient {
 
 protected:
-    TcpClient& socket;
+    shared_ptr<TcpClient> socket;
     string usertoken;
     AES_CBC aes;
 
 public:
-    OcelotClient(TcpClient& client, string user, string password)
+    OcelotClient(shared_ptr<TcpClient> client, string user, string password)
         : socket(client)
         , usertoken(user + "\n" + password)
     {
@@ -314,7 +314,7 @@ public:
                                     if (fastmode)
                                         cout << " in fast mode" << endl;
                                     cout << endl;
-                                    TcpClient target = TcpClient(addr.ip, addr.port);
+                                    TcpClient target(addr.ip, addr.port);
                                     target.setNoDelay(fastmode);
                                     target.Output(buffer);
                                     th = thread([&]() {
