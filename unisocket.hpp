@@ -88,6 +88,9 @@ public:
         this->addr = addr;
     }
 
+    TcpClient(const TcpClient& clone) = delete;
+    TcpClient& operator=(const TcpClient& clone) = delete;
+
     void setSendTimeout(int timeout = 5)
     {
         timeval tv;
@@ -125,7 +128,7 @@ public:
 
         if (connect(socket_fd, (sockaddr*)&serverAddr, sizeof(serverAddr)) == SOCKET_ERROR) {
             std::cout << "Cannot connect to " + ip + ":" + std::to_string(port) << std::endl;
-            closesocket(socket_fd);
+            close();
             throw std::runtime_error("Connect error !");
             return;
         }

@@ -10,7 +10,6 @@
 #include <random>
 #include <stdexcept>
 #include <string>
-#include <vector>
 
 namespace crypto {
 typedef unsigned char byte;

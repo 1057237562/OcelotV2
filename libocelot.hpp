@@ -5,11 +5,8 @@
 #include "tpool"
 #include "unisocket"
 #include <algorithm>
-#include <exception>
-#include <functional>
 #include <iostream>
 #include <map>
-#include <memory>
 #include <mutex>
 #include <ostream>
 #include <stdexcept>
@@ -36,11 +33,11 @@ typedef unsigned char byte;
 
 class OcelotChannel : public NetworkStream {
 protected:
-    TcpClient socket;
+    TcpClient& socket;
     AES_CBC* aes;
 
 public:
-    OcelotChannel(TcpClient client, AES_CBC* aes)
+    OcelotChannel(TcpClient& client, AES_CBC* aes)
         : socket(client)
         , aes(aes)
     {
@@ -113,12 +110,12 @@ public:
 class OcelotClient {
 
 protected:
-    TcpClient socket;
+    TcpClient& socket;
     string usertoken;
     AES_CBC aes;
 
 public:
-    OcelotClient(TcpClient client, string user, string password)
+    OcelotClient(TcpClient& client, string user, string password)
         : socket(client)
         , usertoken(user + "\n" + password)
     {
