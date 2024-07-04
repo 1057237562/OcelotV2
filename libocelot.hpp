@@ -33,11 +33,11 @@ typedef unsigned char byte;
 
 class OcelotChannel : public NetworkStream {
 protected:
-    TcpClient& socket;
+    shared_ptr<TcpClient> socket;
     AES_CBC* aes;
 
 public:
-    OcelotChannel(TcpClient& client, AES_CBC* aes)
+    OcelotChannel(shared_ptr<TcpClient> client, AES_CBC* aes)
         : socket(client)
         , aes(aes)
     {
@@ -48,21 +48,22 @@ public:
         int len = str.length();
         string slen = string((char*)&len, 4);
         slen = aes->encrypt(slen);
-        socket.write(slen, 16);
-        socket.write(str, len);
+        socket->write(slen, 16);
+        socket->write(str, len);
     }
 
     bool read(std::string& str)
     {
         byte header[16];
-        if (!socket.read(&header))
+        if (!socket->read(&header))
             return false;
         string slen = string((char*)header, 16);
         slen = aes->decrypt(slen);
         int len;
         memcpy(&len, slen.data(), 4);
         std::string buf;
-        socket.read(buf, len);
+        if (!socket->read(buf, len))
+            return false;
         str = aes->decrypt(buf);
         return true;
     }
@@ -71,13 +72,13 @@ public:
     {
         try {
             byte header[16];
-            if (!socket.read(&header))
+            if (!socket->read(&header))
                 return 0;
             string slen = string((char*)header, 16);
             slen = aes->decrypt(slen);
             int len;
             memcpy(&len, slen.data(), 4);
-            if (!socket.read(buf, len))
+            if (!socket->read(buf, len))
                 return 0;
             buf = aes->decrypt(buf);
         } catch (runtime_error _) {
@@ -93,17 +94,17 @@ public:
         int len = data.length();
         string slen = string((char*)&len, 4);
         slen = aes->encrypt(slen);
-        if (!socket.write(slen, 16))
+        if (!socket->write(slen, 16))
             return false;
 
-        if (!socket.write(data, len))
+        if (!socket->write(data, len))
             return false;
         return true;
     }
 
     bool isClosed() override
     {
-        return socket.isClosed();
+        return socket->isClosed();
     }
 };
 
@@ -206,33 +207,33 @@ public:
     {
         while (true) {
             auto client = server.accept();
-            client.setRecvTimeout(5);
-            client.setSendTimeout(5);
+            client->setRecvTimeout(5);
+            client->setSendTimeout(5);
             thread handler = thread([&](auto client) {
                 try {
                     char op;
-                    if (!client.read(&op)) {
-                        client.close();
+                    if (!client->read(&op)) {
+                        client->close();
                         return;
                     }
                     if (!op) {
                         string pkey = de.getX509PublicKey();
-                        if (!client.write(pkey)) {
-                            client.close();
+                        if (!client->write(pkey)) {
+                            client->close();
                             return;
                         }
 
                         string key, iv;
                         RSA_PKCS1_OAEP en;
-                        if (!client.read(pkey)) {
-                            client.close();
+                        if (!client->read(pkey)) {
+                            client->close();
                             return;
                         }
                         en.fromX509PublicKey(pkey);
 
                         string token;
-                        if (!client.read(token)) {
-                            client.close();
+                        if (!client->read(token)) {
+                            client->close();
                             return;
                         }
                         token = de.decrypt(token);
@@ -246,28 +247,28 @@ public:
                             sessions[token] = { en, aes };
                             cout << "Session established with" << endl
                                  << token << endl;
-                            if (!client.write(ekey)) {
-                                client.close();
+                            if (!client->write(ekey)) {
+                                client->close();
                                 return;
                             }
-                            if (!client.write(eiv)) {
-                                client.close();
+                            if (!client->write(eiv)) {
+                                client->close();
                                 return;
                             }
                         } else {
                             int st = 0;
-                            client.write(&st);
+                            client->write(&st);
                         }
 
-                        client.close();
+                        client->close();
                     }
                     if (op) {
                         try {
                             byte st = 0;
                             string token;
                             try {
-                                if (!client.read(token)) {
-                                    client.close();
+                                if (!client->read(token)) {
+                                    client->close();
                                     return;
                                 }
                                 token = de.decrypt(token);
@@ -275,15 +276,15 @@ public:
                                 st = 1;
                             } catch (...) {
                                 std::cout << "Failed in certificate" << endl;
-                                client.close();
+                                client->close();
                                 return;
                             }
-                            if (!client.write(&st)) {
-                                client.close();
+                            if (!client->write(&st)) {
+                                client->close();
                                 return;
                             }
                             if (sessions.find(token) == sessions.end()) {
-                                client.close();
+                                client->close();
                                 return;
                             }
                             auto session = &sessions[token];
@@ -291,17 +292,17 @@ public:
                             int port = transmit->getPort();
                             string pstr = string((char*)&port, 4);
                             pstr = session->rsa.encrypt(pstr);
-                            if (!client.write(pstr)) {
+                            if (!client->write(pstr)) {
                                 transmit->close();
                                 return;
                             }
-                            client.close();
+                            client->close();
                             bool fastmode = int(op) == 2;
                             thread th;
                             try {
-                                TcpClient request = transmit->accept(5);
+                                auto request = transmit->accept(5);
                                 transmit->close();
-                                request.setNoDelay(fastmode);
+                                request->setNoDelay(fastmode);
                                 OcelotChannel ocelot = OcelotChannel(request, &session->aes);
                                 try {
                                     string buffer;
@@ -327,7 +328,7 @@ public:
                                         copyTo(&target, &ocelot);
                                     } catch (runtime_error _) {
                                     }
-                                    request.close();
+                                    request->close();
                                     cout << "Connection to " << addr.ip << ":" << addr.port << " closed" << endl;
                                 } catch (...) {
                                     cout << "Connection shut unexpectedly!" << endl;
@@ -339,7 +340,7 @@ public:
                                 th.join();
                             delete transmit;
                         } catch (...) {
-                            client.close();
+                            client->close();
                             cout << "Request link handshake failed!" << endl;
                         }
                     }

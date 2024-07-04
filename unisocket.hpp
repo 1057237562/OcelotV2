@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <iostream>
+#include <memory>
 #include <stdexcept>
 #include <stdio.h>
 #include <string>
@@ -343,7 +344,7 @@ public:
         return ntohs(sin.sin_port);
     }
 
-    TcpClient accept(int timeout = 0) const
+    std::shared_ptr<TcpClient> accept(int timeout = 0) const
     {
         if (timeout) {
             fd_set fds;
@@ -354,10 +355,10 @@ public:
             tv.tv_usec = 0;
             int ret = select(socket_fd + 1, &fds, NULL, NULL, &tv);
             if (ret == 0) {
-                return TcpClient();
+                return std::shared_ptr<TcpClient>(new TcpClient());
             } else if (ret == -1) {
                 throw std::runtime_error("select error");
-                return TcpClient();
+                return std::shared_ptr<TcpClient>(new TcpClient());
             }
         }
 
@@ -365,7 +366,7 @@ public:
         struct sockaddr_in client_addr;
         socklen_t addr_len = sizeof(sockaddr_in);
         s_client = ::accept(socket_fd, (sockaddr*)&client_addr, &addr_len);
-        return TcpClient(s_client, client_addr);
+        return std::shared_ptr<TcpClient>(new TcpClient(s_client, client_addr));
     }
 
     void close()
