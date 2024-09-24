@@ -2,7 +2,7 @@
 #define _LIBOCELOT_HPP_
 
 #include "crypt"
-#include "tpool"
+#include "io"
 #include "unisocket"
 #include <algorithm>
 #include <iostream>
@@ -180,8 +180,7 @@ inline NetworkAddr parseAddr(OcelotChannel client, string& buffer)
 
 class OcelotServer {
 private:
-    threadpool::ThreadPool threadpool;
-    std::map<unisocket::TcpClient*, std::thread*> workers;
+    io::Epoll epoll;
     std::mutex mtx;
 
 protected:
@@ -209,150 +208,123 @@ public:
             auto client = shared_ptr<TcpClient>(server.accept());
             client->setRecvTimeout(5);
             client->setSendTimeout(5);
-            thread handler = thread([&](auto client) {
-                try {
-                    char op;
-                    if (!client->read(&op)) {
+            try {
+                char op;
+                if (!client->read(&op)) {
+                    client->close();
+                    continue;
+                }
+                if (!op) {
+                    string pkey = de.getX509PublicKey();
+                    if (!client->write(pkey)) {
                         client->close();
                         return;
                     }
-                    if (!op) {
-                        string pkey = de.getX509PublicKey();
-                        if (!client->write(pkey)) {
+
+                    string key, iv;
+                    RSA_PKCS1_OAEP en;
+                    if (!client->read(pkey)) {
+                        client->close();
+                        return;
+                    }
+                    en.fromX509PublicKey(pkey);
+
+                    string token;
+                    if (!client->read(token)) {
+                        client->close();
+                        return;
+                    }
+                    token = de.decrypt(token);
+                    token = token.substr(0, strlen(token.data()));
+                    key = random_string(32 + 16), iv = key.substr(32, 16);
+                    key = key.substr(0, 32);
+                    AES_CBC aes(key, iv);
+                    string ekey = en.encrypt(key);
+                    string eiv = en.encrypt(iv);
+                    if (binary_search(tokens.begin(), tokens.end(), token)) {
+                        sessions[token] = { en, aes };
+                        cout << "Session established with" << endl
+                             << token << endl;
+                        if (!client->write(ekey)) {
                             client->close();
                             return;
                         }
-
-                        string key, iv;
-                        RSA_PKCS1_OAEP en;
-                        if (!client->read(pkey)) {
+                        if (!client->write(eiv)) {
                             client->close();
                             return;
                         }
-                        en.fromX509PublicKey(pkey);
-
+                    } else {
+                        int st = 0;
+                        client->write(&st);
+                    }
+                    client->close();
+                }
+                if (op) {
+                    try {
+                        byte st = 0;
                         string token;
-                        if (!client->read(token)) {
+                        try {
+                            if (!client->read(token)) {
+                                client->close();
+                                return;
+                            }
+                            token = de.decrypt(token);
+                            token = token.substr(0, strlen(token.data()));
+                            st = 1;
+                        } catch (...) {
+                            std::cout << "Failed in certificate" << endl;
+                        }
+                        if (!client->write(&st) || !st) {
                             client->close();
                             return;
                         }
-                        token = de.decrypt(token);
-                        token = token.substr(0, strlen(token.data()));
-                        key = random_string(32 + 16), iv = key.substr(32, 16);
-                        key = key.substr(0, 32);
-                        AES_CBC aes(key, iv);
-                        string ekey = en.encrypt(key);
-                        string eiv = en.encrypt(iv);
-                        if (binary_search(tokens.begin(), tokens.end(), token)) {
-                            sessions[token] = { en, aes };
-                            cout << "Session established with" << endl
-                                 << token << endl;
-                            if (!client->write(ekey)) {
-                                client->close();
-                                return;
-                            }
-                            if (!client->write(eiv)) {
-                                client->close();
-                                return;
-                            }
-                        } else {
-                            int st = 0;
-                            client->write(&st);
+                        if (sessions.find(token) == sessions.end()) {
+                            client->close();
+                            return;
+                        }
+                        auto session = sessions[token];
+                        TcpServer transmit("0.0.0.0", 0);
+                        int port = transmit.getPort();
+                        string pstr = string((char*)&port, 4);
+                        pstr = session.rsa.encrypt(pstr);
+                        if (!client->write(pstr)) {
+                            transmit.close();
+                            return;
                         }
                         client->close();
-                    }
-                    if (op) {
-                        try {
-                            byte st = 0;
-                            string token;
-                            try {
-                                if (!client->read(token)) {
-                                    client->close();
-                                    return;
-                                }
-                                token = de.decrypt(token);
-                                token = token.substr(0, strlen(token.data()));
-                                st = 1;
-                            } catch (...) {
-                                std::cout << "Failed in certificate" << endl;
-                            }
-                            if (!client->write(&st) || !st) {
-                                client->close();
-                                return;
-                            }
-                            if (sessions.find(token) == sessions.end()) {
-                                client->close();
-                                return;
-                            }
-                            auto session = &sessions[token];
-                            TcpServer* transmit = new TcpServer("0.0.0.0", 0);
-                            int port = transmit->getPort();
-                            string pstr = string((char*)&port, 4);
-                            pstr = session->rsa.encrypt(pstr);
-                            if (!client->write(pstr)) {
-                                transmit->close();
-                                return;
-                            }
-                            client->close();
-                            bool fastmode = int(op) == 2;
-                            thread th;
-                            TcpClient* request = nullptr;
-                            try {
-                                request = transmit->accept(5);
-                            } catch (...) {
-                                client->close();
-                                cout << "Request link handshake failed!" << endl;
-                            }
-                            transmit->close();
-                            delete transmit;
-                            if (request == nullptr) {
-                                return;
-                            }
-                            try {
-                                request->setNoDelay(fastmode);
-                                OcelotChannel ocelot = OcelotChannel(request, &session->aes);
-                                string buffer;
-                                auto addr = parseAddr(ocelot, buffer);
-                                cout << "Fetch ip addr : " << addr.ip << " port :" << addr.port;
-                                if (addr.port == -1 && addr.ip == "") {
-                                    return;
-                                }
-                                if (fastmode)
-                                    cout << " in fast mode" << endl;
-                                cout << endl;
-                                TcpClient target(addr.ip, addr.port);
-                                target.setNoDelay(fastmode);
-                                target.Output(buffer);
-                                th = thread([&]() {
-                                    try {
-                                        copyTo(&ocelot, &target);
-                                    } catch (runtime_error _) {
-                                    }
-                                    target.close();
-                                });
-                                try {
-                                    copyTo(&target, &ocelot);
-                                } catch (runtime_error _) {
-                                }
-                                request->close();
-                                cout << "Connection to " << addr.ip << ":" << addr.port << " closed" << endl;
-                            } catch (...) {
-                                cout << "Connection shut unexpectedly!" << endl;
-                            }
-                            if (th.joinable())
-                                th.join();
-                            delete request;
-                        } catch (...) {
-                            cout << "Failed to establish connection!" << endl;
+                        bool fastmode = int(op) == 2;
+                        auto request = transmit.accept(5);
+                        transmit.close();
+                        if (request == nullptr) {
+                            continue;
                         }
+                        request->setNoDelay(fastmode);
+                        OcelotChannel ocelot = OcelotChannel(request, &session.aes);
+                        string buffer;
+                        auto addr = parseAddr(ocelot, buffer);
+                        // cout << "Fetch ip addr : " << addr.ip << " port :" << addr.port;
+                        if (addr.port == -1 && addr.ip == "") {
+                            return;
+                        }
+                        if (fastmode)
+                            cout << " in fast mode" << endl;
+                        cout << endl;
+                        TcpClient target(addr.ip, addr.port);
+                        target.setNoDelay(fastmode);
+                        target.Output(buffer);
+                        epoll.registerSocket(target, [=](TcpClient& socket) {
+
+                        });
+                        epoll.registerSocket(*request, [=](TcpClient& socket) {
+
+                        });
+                    } catch (...) {
+                        cout << "Failed to establish connection!" << endl;
                     }
-                } catch (...) {
-                    cout << "Client closed without sending any message!" << endl;
                 }
-            },
-                client);
-            if (handler.joinable())
-                handler.detach();
+            } catch (...) {
+                cout << "Client closed without sending any message!" << endl;
+            }
         }
     }
 };

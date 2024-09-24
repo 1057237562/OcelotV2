@@ -21,6 +21,8 @@
 #include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <sys/epoll.h>
+#include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -88,9 +90,15 @@ public:
         this->socket_fd = socket_fd;
         this->addr = addr;
     }
+    TcpClient(SOCKET socket_fd)
+    {
+        this->socket_fd = socket_fd;
+    }
 
     TcpClient(const TcpClient& clone) = delete;
     TcpClient& operator=(const TcpClient& clone) = delete;
+
+    SOCKET getFD() { return socket_fd; }
 
     void setSendTimeout(int timeout = 5)
     {
@@ -355,10 +363,9 @@ public:
             tv.tv_usec = 0;
             int ret = select(socket_fd + 1, &fds, NULL, NULL, &tv);
             if (ret == 0) {
-                return new TcpClient();
+                return nullptr;
             } else if (ret == -1) {
                 throw std::runtime_error("select error");
-                return new TcpClient();
             }
         }
 
