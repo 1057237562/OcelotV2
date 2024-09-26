@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <iostream>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <ostream>
 #include <stdexcept>
@@ -205,7 +206,7 @@ public:
     void start()
     {
         while (true) {
-            auto client = shared_ptr<TcpClient>(server.accept());
+            auto client = make_shared<TcpClient>(server.accept());
             client->setRecvTimeout(5);
             client->setSendTimeout(5);
             try {
@@ -293,13 +294,13 @@ public:
                         }
                         client->close();
                         bool fastmode = int(op) == 2;
-                        auto request = transmit.accept(5);
+                        auto request = make_shared<TcpClient>(transmit.accept(5));
                         transmit.close();
                         if (request == nullptr) {
                             continue;
                         }
                         request->setNoDelay(fastmode);
-                        OcelotChannel ocelot = OcelotChannel(request, &session.aes);
+                        OcelotChannel ocelot = OcelotChannel(request.get(), &session.aes);
                         string buffer;
                         auto addr = parseAddr(ocelot, buffer);
                         // cout << "Fetch ip addr : " << addr.ip << " port :" << addr.port;
@@ -312,12 +313,6 @@ public:
                         TcpClient target(addr.ip, addr.port);
                         target.setNoDelay(fastmode);
                         target.Output(buffer);
-                        epoll.registerSocket(target, [=](TcpClient& socket) {
-
-                        });
-                        epoll.registerSocket(*request, [=](TcpClient& socket) {
-
-                        });
                     } catch (...) {
                         cout << "Failed to establish connection!" << endl;
                     }

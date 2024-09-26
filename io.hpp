@@ -38,92 +38,127 @@
 #endif
 
 namespace io {
-using namespace std;
-using namespace unisocket;
-class SocketStream {
-    queue<pair<size_t, function<void(void*)>>> que;
+    using namespace std;
+    using namespace unisocket;
 
-public:
-    template <typename T>
-    void read(function<void(T)>& func)
-    {
-        que.push(make_pair(sizeof(T), [&](void* mem) {
-            T* val = mem;
-            func(*val);
-        }));
-    }
-};
+    class PassiveSocket {
+        vector<char> buffer;
+        size_t ptr = 0;
+        queue<pair<size_t, function<void(void *, SOCKET)> > > que;
 
-class Epoll {
-    HANDLE epoll_fd;
-    atomic_int conn;
-    thread th;
-    map<SOCKET, function<void(TcpClient&)>> mp;
-
-public:
-    Epoll()
-    {
-        epoll_fd = epoll_create1(0);
-    }
-
-    void registerSocket(TcpClient& socket, function<void(TcpClient&)> func)
-    {
-        epoll_event event;
-        event.events = { EPOLLIN };
-        event.data.fd = socket.getFD();
-        if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, socket.getFD(), &event) == -1) {
-            cerr << "epoll_ctl failed" << endl;
-            socket.close();
-            epoll_close(epoll_fd);
-            return;
+    public:
+        template<typename T>
+        void read(function<void(T, SOCKET)> func) {
+            que.push(make_pair(sizeof(T), [=](void *mem, SOCKET socket) {
+                T *val = static_cast<T *>(mem);
+                func(*val, socket);
+            }));
+            if (buffer.empty()) {
+                buffer.resize(sizeof(T));
+                ptr = 0;
+            }
         }
-        mp[socket.getFD()] = func;
-        if (!conn) {
-            th = thread([&]() {
-                while (conn) {
-                    vector<epoll_event> events(conn);
-                    if (int r = epoll_wait(epoll_fd, events.data(), conn, 0)) {
-                        if (r == -1) {
-                            cerr << "epoll_wait failed" << endl;
-                            epoll_close(epoll_fd);
-                        }
-                        for (int i = 0; i < r; i++) {
-                            TcpClient client(events[i].data.fd);
-                            if (events[i].events & EPOLLHUP) {
-                                epoll_ctl(epoll_fd, EPOLL_CTL_DEL, client.getFD(), NULL);
-                                client.close();
+
+        int recvData(SOCKET socket) {
+            if (this == NULL) return -1;
+            int r;
+            if ((r = recv(socket, buffer.data() + ptr, buffer.size() - ptr, 0))) {
+                if (r == -1) return -1;
+                ptr += r;
+                if (ptr == buffer.size()) {
+                    auto top = que.front();
+                    que.pop();
+                    top.second(buffer.data(), socket);
+                    if (!que.empty()) {
+                        top = que.front();
+                        buffer.resize(top.first);
+                        ptr = 0;
+                    }
+                }
+            }
+            return r;
+        }
+    };
+
+    class Epoll {
+        HANDLE epoll_fd;
+        atomic_int conn;
+        thread th;
+        map<SOCKET, shared_ptr<PassiveSocket> > mp;
+
+    public:
+        Epoll() {
+            epoll_fd = epoll_create1(0);
+        }
+
+        ~Epoll() {
+            epoll_close(epoll_fd);
+            if (th.joinable())
+                th.join();
+        }
+
+        void registerSocket(const shared_ptr<TcpClient> &socket, shared_ptr<PassiveSocket> passive) {
+            epoll_event event{};
+            event.events = {EPOLLIN};
+            event.data.fd = socket->getFD();
+            if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, socket->getFD(), &event) == -1) {
+                cerr << "epoll_ctl failed" << endl;
+                socket->close();
+                epoll_close(epoll_fd);
+                return;
+            }
+            mp.insert(make_pair(socket->getFD(), shared_ptr<PassiveSocket>(std::move(passive))));
+            cout << "Incoming Transmission " << mp.size() << endl;
+            if (!conn++) {
+                if (th.joinable())
+                    th.join();
+                th = thread([&]() {
+                    while (conn) {
+                        vector<epoll_event> events(conn);
+                        if (int r = epoll_wait(epoll_fd, events.data(), conn, -1)) {
+                            if (r == -1) {
+                                cerr << "epoll_wait failed" << endl;
+                                close();
                             }
-                            if (events[i].events & EPOLLIN) {
-                                mp[events[i].data.fd](client);
+                            for (int i = 0; i < r; i++) {
+                                TcpClient client(events[i].data.fd);
+                                if (events[i].events & EPOLLHUP) {
+                                    unregisterSocket(client);
+                                } else if (events[i].events & EPOLLIN) {
+                                    if (mp[events[i].data.fd]->recvData(events[i].data.fd) <= 0) {
+                                        unregisterSocket(client);
+                                    }
+                                }
                             }
                         }
                     }
-                }
-            });
+                });
+            }
+            ++conn;
         }
-        ++conn;
-    }
 
-    void unregisterSocket(TcpClient& socket)
-    {
-        if (epoll_ctl(epoll_fd, EPOLL_CTL_DEL, socket.getFD(), NULL) == -1) {
-            cerr << "epoll_ctl failed" << endl;
+        void unregisterSocket(TcpClient &socket) {
+            cout << "Connection closed" << endl;
+            if (epoll_ctl(epoll_fd, EPOLL_CTL_DEL, socket.getFD(), NULL) == -1) {
+                cerr << "epoll_ctl failed" << endl;
+                epoll_close(epoll_fd);
+            }
             socket.close();
-            epoll_close(epoll_fd);
+            if (mp.find(socket.getFD()) != mp.end())
+                mp.erase(socket.getFD());
+            --conn;
         }
-    }
 
-    void close()
-    {
-        for (auto p : mp) {
-            closesocket(p.first);
+        void close() {
+            for (const auto &p: mp) {
+                closesocket(p.first);
+            }
+            conn = 0;
+            epoll_close(epoll_fd);
+            if (th.joinable())
+                th.join();
         }
-        conn = 0;
-        epoll_close(epoll_fd);
-        if (th.joinable())
-            th.join();
-    }
-};
+    };
 }
 
 #endif
