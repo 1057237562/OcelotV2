@@ -327,7 +327,7 @@ public:
         }
 
         // listen
-        if (listen(socket_fd, BACKLOG) == SOCKET_ERROR) {
+        if (listen(socket_fd, 1024) == SOCKET_ERROR) {
             throw std::runtime_error("listen error");
             return;
         }
