@@ -293,10 +293,10 @@ namespace unisocket {
     protected:
         SOCKET socket_fd;
         bool closed = false;
+        sockaddr_in server_addr;
 
     public:
         TcpServer(const std::string ip, const int port) {
-            struct sockaddr_in server_addr;
             server_addr.sin_family = AF_INET;
             server_addr.sin_port = htons(port);
             server_addr.sin_addr.s_addr = inet_addr(ip.c_str());
@@ -305,27 +305,24 @@ namespace unisocket {
 
             if (socket_fd == -1) {
                 throw std::runtime_error("Can't open socket port");
-                return;
             }
 
             int on = 1;
-            if (setsockopt(socket_fd, SOL_SOCKET, SO_REUSEADDR, (const char *) &on, sizeof(on)) == -1) {
+            if (setsockopt(socket_fd, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char *>(&on),
+                           sizeof(on)) == -1) {
                 // 防止出现bind error的地址已被占用
                 throw std::runtime_error("Can't setsockopt");
-                return;
             }
 
-            int bind_result = bind(socket_fd, (struct sockaddr *) &server_addr, sizeof(server_addr));
+            int bind_result = bind(socket_fd, reinterpret_cast<struct sockaddr *>(&server_addr), sizeof(server_addr));
 
             if (bind_result == -1) {
                 throw std::runtime_error("bind error");
-                return;
             }
 
             // listen
-            if (listen(socket_fd, BACKLOG) == SOCKET_ERROR) {
+            if (listen(socket_fd, 1024) == SOCKET_ERROR) {
                 throw std::runtime_error("listen error");
-                return;
             }
         }
 
@@ -359,6 +356,12 @@ namespace unisocket {
             sockaddr_in client_addr{};
             socklen_t addr_len = sizeof(sockaddr_in);
             SOCKET s_client = ::accept(socket_fd, reinterpret_cast<sockaddr *>(&client_addr), &addr_len);
+
+            int on = 1;
+            if (setsockopt(s_client, SOL_SOCKET, SO_LINGER, reinterpret_cast<const char *>(&on),
+                           sizeof(on)) == -1) {
+                throw std::runtime_error("Can't setsockopt");
+            }
             return new TcpClient(s_client, client_addr);
         }
 

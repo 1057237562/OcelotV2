@@ -6,7 +6,7 @@
 #include <future>
 #include <map>
 #include <queue>
-#include <stdexcept>
+#include <mutex>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -60,10 +60,8 @@ namespace io {
         }
 
         int recvData(SOCKET socket) {
-            if (this == NULL) return -1;
             int r;
-            if ((r = recv(socket, buffer.data() + ptr, buffer.size() - ptr, 0))) {
-                if (r == -1) return -1;
+            if ((r = recv(socket, buffer.data() + ptr, buffer.size() - ptr, 0)) > 0) {
                 ptr += r;
                 if (ptr == buffer.size()) {
                     auto top = que.front();
@@ -85,10 +83,15 @@ namespace io {
         atomic_int conn;
         thread th;
         map<SOCKET, shared_ptr<PassiveSocket> > mp;
+        pair<SOCKET, shared_ptr<PassiveSocket> > buffer[4096];
+        epoll_event events[1024];
+        int limit;
+        int ptr;
 
     public:
         Epoll() {
             epoll_fd = epoll_create1(0);
+            conn = limit = ptr = 0;
         }
 
         ~Epoll() {
@@ -97,7 +100,9 @@ namespace io {
                 th.join();
         }
 
-        void registerSocket(const shared_ptr<TcpClient> &socket, shared_ptr<PassiveSocket> passive) {
+        void registerSocket(const shared_ptr<TcpClient> &socket, const shared_ptr<PassiveSocket> &passive) {
+            buffer[limit++] = make_pair(socket->getFD(), shared_ptr<PassiveSocket>(passive));
+            limit %= 4096;
             epoll_event event{};
             event.events = {EPOLLIN};
             event.data.fd = socket->getFD();
@@ -107,15 +112,17 @@ namespace io {
                 epoll_close(epoll_fd);
                 return;
             }
-            mp.insert(make_pair(socket->getFD(), shared_ptr<PassiveSocket>(std::move(passive))));
-            cout << "Incoming Transmission " << mp.size() << endl;
             if (!conn++) {
                 if (th.joinable())
                     th.join();
                 th = thread([&]() {
                     while (conn) {
-                        vector<epoll_event> events(conn);
-                        if (int r = epoll_wait(epoll_fd, events.data(), conn, -1)) {
+                        cout << "Incoming Transmission " << mp.size() << endl;
+                        while (limit != ptr) {
+                            mp.insert(buffer[ptr++]);
+                            ptr %= 4096;
+                        }
+                        if (int r = epoll_wait(epoll_fd, events, 1024, -1)) {
                             if (r == -1) {
                                 cerr << "epoll_wait failed" << endl;
                                 close();
@@ -124,9 +131,12 @@ namespace io {
                                 TcpClient client(events[i].data.fd);
                                 if (events[i].events & EPOLLHUP) {
                                     unregisterSocket(client);
-                                } else if (events[i].events & EPOLLIN) {
-                                    if (mp[events[i].data.fd]->recvData(events[i].data.fd) <= 0) {
-                                        unregisterSocket(client);
+                                }
+                                if (events[i].events & EPOLLIN) {
+                                    if (mp[events[i].data.fd].get() != nullptr) {
+                                        if (mp[events[i].data.fd]->recvData(events[i].data.fd) == 0) {
+                                            unregisterSocket(client);
+                                        }
                                     }
                                 }
                             }
@@ -144,15 +154,11 @@ namespace io {
                 epoll_close(epoll_fd);
             }
             socket.close();
-            if (mp.find(socket.getFD()) != mp.end())
-                mp.erase(socket.getFD());
+            mp.erase(socket.getFD());
             --conn;
         }
 
         void close() {
-            for (const auto &p: mp) {
-                closesocket(p.first);
-            }
             conn = 0;
             epoll_close(epoll_fd);
             if (th.joinable())
