@@ -326,6 +326,10 @@ namespace unisocket {
             }
         }
 
+        SOCKET getFD() {
+            return socket_fd;
+        }
+
         int getPort() {
             struct sockaddr_in sin;
             socklen_t len = sizeof(sin);

@@ -8,6 +8,7 @@
 #include <queue>
 #include <mutex>
 #include <thread>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -37,6 +38,8 @@
 #define epoll_close(x) ::close(x)
 #endif
 
+#define FD_MAX 65536
+
 namespace io {
     using namespace std;
     using namespace unisocket;
@@ -47,6 +50,10 @@ namespace io {
         queue<pair<size_t, function<void(void *, SOCKET)> > > que;
 
     public:
+        ~PassiveSocket() {
+            cout << "Passive Socket deleted " << this << endl;
+        }
+
         template<typename T>
         void read(function<void(T, SOCKET)> func) {
             que.push(make_pair(sizeof(T), [=](void *mem, SOCKET socket) {
@@ -82,16 +89,13 @@ namespace io {
         HANDLE epoll_fd;
         atomic_int conn;
         thread th;
-        map<SOCKET, shared_ptr<PassiveSocket> > mp;
-        pair<SOCKET, shared_ptr<PassiveSocket> > buffer[4096];
+        shared_ptr<PassiveSocket> mp[FD_MAX];
         epoll_event events[1024];
-        int limit;
-        int ptr;
 
     public:
         Epoll() {
             epoll_fd = epoll_create1(0);
-            conn = limit = ptr = 0;
+            conn = 0;
         }
 
         ~Epoll() {
@@ -100,28 +104,12 @@ namespace io {
                 th.join();
         }
 
-        void registerSocket(const shared_ptr<TcpClient> &socket, const shared_ptr<PassiveSocket> &passive) {
-            buffer[limit++] = make_pair(socket->getFD(), shared_ptr<PassiveSocket>(passive));
-            limit %= 4096;
-            epoll_event event{};
-            event.events = {EPOLLIN};
-            event.data.fd = socket->getFD();
-            if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, socket->getFD(), &event) == -1) {
-                cerr << "epoll_ctl failed" << endl;
-                socket->close();
-                epoll_close(epoll_fd);
-                return;
-            }
-            if (!conn++) {
-                if (th.joinable())
-                    th.join();
-                th = thread([&]() {
+        void syncEpollThread() {
+            if (th.joinable())
+                th.join();
+            th = thread([&]() {
                     while (conn) {
-                        cout << "Incoming Transmission " << mp.size() << endl;
-                        while (limit != ptr) {
-                            mp.insert(buffer[ptr++]);
-                            ptr %= 4096;
-                        }
+                        cout << "Incoming Transmission " << conn << endl;
                         if (int r = epoll_wait(epoll_fd, events, 1024, -1)) {
                             if (r == -1) {
                                 cerr << "epoll_wait failed" << endl;
@@ -133,18 +121,32 @@ namespace io {
                                     unregisterSocket(client);
                                 }
                                 if (events[i].events & EPOLLIN) {
-                                    if (mp[events[i].data.fd].get() != nullptr) {
-                                        if (mp[events[i].data.fd]->recvData(events[i].data.fd) == 0) {
-                                            unregisterSocket(client);
-                                        }
+                                    if (mp[events[i].data.fd]->recvData(events[i].data.fd) == 0) {
+                                        unregisterSocket(client);
                                     }
                                 }
                             }
                         }
                     }
-                });
+                }
+
+            );
+        }
+
+        void registerSocket(const shared_ptr<TcpClient> &socket, const shared_ptr<PassiveSocket> &passive) {
+            mp[socket->getFD()] = shared_ptr<PassiveSocket>(passive);
+            epoll_event event{};
+            event.events = {EPOLLIN};
+            event.data.fd = socket->getFD();
+            if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, socket->getFD(), &event) == -1) {
+                cerr << "epoll_ctl failed" << endl;
+                socket->close();
+                epoll_close(epoll_fd);
+                return;
             }
-            ++conn;
+            if (!conn++) {
+                syncEpollThread();
+            }
         }
 
         void unregisterSocket(TcpClient &socket) {
@@ -154,7 +156,6 @@ namespace io {
                 epoll_close(epoll_fd);
             }
             socket.close();
-            mp.erase(socket.getFD());
             --conn;
         }
 

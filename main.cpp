@@ -13,6 +13,7 @@ int main() {
     Epoll epoll;
     TcpServer server("0.0.0.0", 2080);
     atomic_int cnt(0);
+    shared_ptr<PassiveSocket> passive = make_shared<PassiveSocket>();
     while (true) {
         cout << "Waiting for connection..." << endl;
         shared_ptr<TcpClient> client = shared_ptr<TcpClient>(server.accept());
