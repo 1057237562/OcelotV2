@@ -1,7 +1,7 @@
 #ifndef _LIBOCELOT_HPP_
 #define _LIBOCELOT_HPP_
 
-#include "crypt"
+#include "crypto"
 #include "io"
 #include "unisocket"
 #include <algorithm>
@@ -35,14 +35,6 @@ namespace ocelot {
 
     typedef unsigned char byte;
 
-    struct X509Key {
-        char data[162];
-    };
-
-    struct SHA256Digest {
-        char data[32];
-    };
-
     class PassiveOcelotChannel : public PassiveSocket {
     protected:
         RSA_PKCS1_OAEP encryptor;
@@ -67,7 +59,7 @@ namespace ocelot {
                     TcpClient inbound(socket);
                     string pkey = decryptor.getX509PublicKey();
                     inbound.write(pkey);
-                    read<X509Key>([this](X509Key pkey, SOCKET) {
+                    read<X509PublicKey>([this](X509PublicKey pkey, SOCKET) {
                         auto str = string(pkey.data);
                         encryptor.fromX509PublicKey(str);
                     });

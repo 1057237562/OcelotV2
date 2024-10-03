@@ -231,6 +231,11 @@ namespace unisocket {
             return true;
         }
 
+        template<typename T>
+        bool write(T &val) {
+            return write(&val);
+        }
+
         bool write(std::string &str, int len) {
             if (!len)
                 return true;

@@ -1,19 +1,22 @@
-#include "crypt"
+#include "crypto"
 #include "unisocket"
 #include <iostream>
 #include <string>
 
-int main(void)
-{
+#include "libocelot.hpp"
+
+int main(void) {
     using namespace unisocket;
     using namespace std;
     using namespace crypto;
-    string usertoken = "libra\n65536forC";
+    string usertoken = sha256_string("libra\n65536forC");
+
     init();
     TcpClient client = TcpClient("127.0.0.1", 2080);
-    client.write(&"");
-    string key, iv;
-    client.read(key);
+    char op = 0;
+    client.write(op);
+    X509PublicKey key{};
+    client.read(&key);
     RSA_PKCS1_OAEP en;
     en.fromX509PublicKey(key);
 
