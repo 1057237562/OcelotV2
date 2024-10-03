@@ -30,6 +30,9 @@
 #define SOCKET int
 #define closesocket(x) ::close(x)
 #endif
+
+#define endl '\n'
+
 namespace unisocket {
     static bool initialized = false;
 
@@ -42,7 +45,6 @@ namespace unisocket {
 
             if (WSAStartup(sockVersion, &wsaData)) {
                 throw std::runtime_error("Cannot startup WSA!");
-                return;
             }
 #endif
         }
@@ -61,6 +63,8 @@ namespace unisocket {
 
     class NetworkStream {
     public:
+        virtual ~NetworkStream() = default;
+
         NetworkStream() { init(); }
 
         virtual int Input(std::string &buf) = 0;
@@ -80,19 +84,19 @@ namespace unisocket {
     }
 
     class TcpClient : public NetworkStream {
-        SOCKET socket_fd;
-        sockaddr_in addr;
+        SOCKET socket_fd{};
+        sockaddr_in addr{};
         bool closed = false;
 
     public:
         TcpClient() { closed = true; }
 
-        TcpClient(SOCKET socket_fd, sockaddr_in addr) {
+        TcpClient(const SOCKET socket_fd, const sockaddr_in addr) {
             this->socket_fd = socket_fd;
             this->addr = addr;
         }
 
-        TcpClient(SOCKET socket_fd) {
+        TcpClient(const SOCKET socket_fd) {
             this->socket_fd = socket_fd;
         }
 
@@ -100,50 +104,50 @@ namespace unisocket {
 
         TcpClient &operator=(const TcpClient &clone) = delete;
 
-        SOCKET getFD() { return socket_fd; }
+        SOCKET getFD() const { return socket_fd; }
 
-        void setSendTimeout(int timeout = 5) {
-            timeval tv;
+        void setSendTimeout(const int timeout = 5) const {
+            timeval tv{};
             tv.tv_sec = timeout;
             tv.tv_usec = 0;
-            setsockopt(socket_fd, SOL_SOCKET, SO_SNDTIMEO, (char *) &tv, sizeof(tv));
+            setsockopt(socket_fd, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<char *>(&tv), sizeof(tv));
         }
 
-        void setRecvTimeout(int timeout = 5) {
-            timeval tv;
+        void setRecvTimeout(const int timeout = 5) const {
+            timeval tv{};
             tv.tv_sec = timeout;
             tv.tv_usec = 0;
-            setsockopt(socket_fd, SOL_SOCKET, SO_RCVTIMEO, (char *) &tv, sizeof(tv));
+            setsockopt(socket_fd, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<char *>(&tv), sizeof(tv));
         }
 
-        TcpClient(const std::string ip, const int port) {
+        TcpClient(const std::string &ip, const int port) {
             socket_fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 
-            sockaddr_in serverAddr;
+            sockaddr_in serverAddr{};
             serverAddr.sin_family = AF_INET;
             serverAddr.sin_port = htons(port);
             serverAddr.sin_addr.s_addr = inet_addr(ip.c_str());
 
-            addrinfo hints, *res;
+            addrinfo hints{}, *res;
             memset(&hints, 0, sizeof(addrinfo));
             hints.ai_socktype = SOCK_STREAM;
             hints.ai_family = AF_INET;
 
             if (!getaddrinfo(ip.c_str(), NULL, &hints, &res)) {
-                serverAddr.sin_addr.s_addr = ((struct sockaddr_in *) res->ai_addr)->sin_addr.s_addr;
+                serverAddr.sin_addr.s_addr = reinterpret_cast<sockaddr_in *>(res->ai_addr)->sin_addr.s_addr;
                 freeaddrinfo(res);
             }
 
-            if (connect(socket_fd, (sockaddr *) &serverAddr, sizeof(serverAddr)) == SOCKET_ERROR) {
-                std::cout << "Cannot connect to " + ip + ":" + std::to_string(port) << std::endl;
+            if (connect(socket_fd, reinterpret_cast<sockaddr *>(&serverAddr), sizeof(serverAddr)) == SOCKET_ERROR) {
+                std::cerr << "Cannot connect to " + ip + ":" + std::to_string(port) << endl;;
                 close();
                 throw std::runtime_error("Connect error !");
-                return;
             }
         }
 
-        bool setNoDelay(bool nodelay) {
-            int ret = setsockopt(socket_fd, IPPROTO_TCP, TCP_NODELAY, (char *) &nodelay, sizeof(nodelay));
+        bool setNoDelay(bool nodelay) const {
+            int ret = setsockopt(socket_fd, IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<char *>(&nodelay),
+                                 sizeof(nodelay));
             return ret != SOCKET_ERROR;
         }
 
@@ -212,7 +216,7 @@ namespace unisocket {
         template<typename T>
         bool write(T *val) {
             int bufsize = sizeof(T), ptr = 0;
-            int ret = send(socket_fd, (const char *) val, bufsize, 0);
+            int ret = send(socket_fd, reinterpret_cast<const char *>(val), bufsize, 0);
             bufsize -= ret;
             ptr += ret;
             while (bufsize) {
@@ -220,7 +224,7 @@ namespace unisocket {
                     close();
                     return false;
                 }
-                ret = send(socket_fd, (const char *) val + ptr, bufsize, 0);
+                ret = send(socket_fd, reinterpret_cast<const char *>(val) + ptr, bufsize, 0);
                 bufsize -= ret;
                 ptr += ret;
             }
@@ -293,10 +297,10 @@ namespace unisocket {
     protected:
         SOCKET socket_fd;
         bool closed = false;
-        sockaddr_in server_addr;
+        sockaddr_in server_addr{};
 
     public:
-        TcpServer(const std::string ip, const int port) {
+        TcpServer(const std::string &ip, const int port, const int backlog = 1024) {
             server_addr.sin_family = AF_INET;
             server_addr.sin_port = htons(port);
             server_addr.sin_addr.s_addr = inet_addr(ip.c_str());
@@ -310,7 +314,6 @@ namespace unisocket {
             int on = 1;
             if (setsockopt(socket_fd, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char *>(&on),
                            sizeof(on)) == -1) {
-                // 防止出现bind error的地址已被占用
                 throw std::runtime_error("Can't setsockopt");
             }
 
@@ -320,22 +323,20 @@ namespace unisocket {
                 throw std::runtime_error("bind error");
             }
 
-            // listen
-            if (listen(socket_fd, 1024) == SOCKET_ERROR) {
+            if (listen(socket_fd, backlog) == SOCKET_ERROR) {
                 throw std::runtime_error("listen error");
             }
         }
 
-        SOCKET getFD() {
+        SOCKET getFD() const {
             return socket_fd;
         }
 
-        int getPort() {
-            struct sockaddr_in sin;
+        int getPort() const {
+            sockaddr_in sin{};
             socklen_t len = sizeof(sin);
-            if (getsockname(socket_fd, (struct sockaddr *) &sin, &len) == -1) {
+            if (getsockname(socket_fd, reinterpret_cast<sockaddr *>(&sin), &len) == -1) {
                 throw std::runtime_error("getsockname error");
-                return -1;
             }
             return ntohs(sin.sin_port);
         }
@@ -348,7 +349,7 @@ namespace unisocket {
                 timeval tv{};
                 tv.tv_sec = timeout;
                 tv.tv_usec = 0;
-                int ret = select(socket_fd + 1, &fds, NULL, NULL, &tv);
+                int ret = select(socket_fd + 1, &fds, nullptr, nullptr, &tv);
                 if (ret == 0) {
                     return nullptr;
                 }

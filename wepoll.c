@@ -132,7 +132,6 @@ WEPOLL_EXPORT int epoll_wait(HANDLE ephnd,
 #include <winsock2.h>
 #include <ws2tcpip.h>
 
-
 #if defined(__clang__)
 #pragma clang diagnostic pop
 #elif defined(_MSC_VER)
