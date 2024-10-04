@@ -54,30 +54,31 @@ namespace ocelot {
 
     public:
         PassiveOcelotControl(RSA_PKCS1_OAEP de, vector<string> &tokens) : decryptor(std::move(de)), tks(tokens) {
-            read<char>([this](const char op, const SOCKET socket) {
-                if (op == 0) {
-                    TcpClient inbound(socket);
-                    string pkey = decryptor.getX509PublicKey();
-                    inbound.write(pkey);
-                    read<X509PublicKey>([this](X509PublicKey pkey, SOCKET) {
-                        auto str = string(pkey.data);
-                        encryptor.fromX509PublicKey(str);
+            read<char>([=](const char op, const SOCKET socket_fd, PassiveSocket *passive_socket) {
+                if ((op ^ 'O') == 0) {
+                    TcpClient outbound(socket_fd);
+                    X509PublicKey pkey(decryptor.getX509PublicKey());
+                    outbound.write(pkey);
+
+                    passive_socket->read<X509PublicKey>([=](X509PublicKey key, SOCKET, PassiveSocket *control) {
+                        reinterpret_cast<PassiveOcelotControl *>(control)->encryptor.fromX509PublicKey(key);
                     });
-                    read<SHA256Digest>([this](SHA256Digest digest, SOCKET socket) {
+                    passive_socket->read<SHA256Digest>([=](SHA256Digest digest, SOCKET socket, PassiveSocket *control) {
                         TcpClient inbound(socket);
-                        if (binary_search(tks.begin(), tks.end(), string(digest.data))) {
+                        int state = 0;
+                        string token(digest.data, 32);
+                        if (ranges::binary_search(tks, token)) {
+                            state = 1;
                             string key = random_string(32 + 16), iv = key.substr(32, 16);
+                            string ekey = reinterpret_cast<PassiveOcelotControl *>(control)->encryptor.encrypt(key);
                             key = key.substr(0, 32);
                             AES_CBC aes(key, iv);
-                            string ekey = encryptor.encrypt(key);
-                            string eiv = encryptor.encrypt(iv);
-                            inbound.write(ekey);
-                            inbound.write(eiv);
-                        } else {
-                            int state = 0;
-                            inbound.write(&state);
+                            inbound.write(ekey, 128);
                         }
+                        inbound.write(&state);
                     });
+                }
+                if ((op ^ 'O') == 1) {
                 }
             });
         }
@@ -93,7 +94,7 @@ namespace ocelot {
     public:
         EpollOcelot(const TcpServer &server, vector<string> tks) : server(server), tokens(std::move(tks)) {
             de.generateKey();
-            sort(this->tokens.begin(), this->tokens.end());
+            ranges::sort(tokens);
         }
 
         ~EpollOcelot() { closed = true; }
@@ -103,7 +104,8 @@ namespace ocelot {
                 auto client = shared_ptr<TcpClient>(server.accept());
                 client->setRecvTimeout(5);
                 client->setSendTimeout(5);
-                shared_ptr<PassiveSocket> passive = make_shared<PassiveSocket>(PassiveOcelotControl(de, tokens));
+                shared_ptr<PassiveSocket> passive = make_shared<
+                    PassiveSocket>(PassiveOcelotControl(de, tokens));
                 epoll.registerSocket(client, passive);
             }
         }

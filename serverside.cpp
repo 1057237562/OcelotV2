@@ -13,8 +13,9 @@ int main() {
     cin.tie(nullptr);
     cout.tie(nullptr);
     init();
-    vector<Epoll> epoll(cores);
     TcpServer server("0.0.0.0", 2080);
-    ocelot::EpollOcelot ocelot(server, {"12345"});
-    ocelot.start();
+    vector<string> tokens = {crypto::sha256_string("libra\n65536forC")};
+    auto ocelot = new ocelot::EpollOcelot(server, tokens);
+    ocelot->start();
+    delete ocelot;
 }

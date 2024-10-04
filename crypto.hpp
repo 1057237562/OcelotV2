@@ -18,6 +18,8 @@ namespace crypto {
     struct X509PublicKey {
         char data[162]{};
 
+        X509PublicKey() = default;
+
         X509PublicKey(const std::string &key) { memcpy(data, key.data(), 162); }
     };
 
@@ -315,7 +317,7 @@ namespace crypto {
         }
 
         void fromX509PublicKey(X509PublicKey &key) {
-            std::string str(key.data);
+            std::string str(key.data, 162);
             fromX509PublicKey(str);
         }
 

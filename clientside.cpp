@@ -5,36 +5,36 @@
 
 #include "libocelot.hpp"
 
-int main(void) {
+int main() {
     using namespace unisocket;
     using namespace std;
     using namespace crypto;
-    string usertoken = sha256_string("libra\n65536forC");
-
     init();
+
+    SHA256Digest usertoken = SHA256Digest(sha256_string("libra\n65536forC"));
     TcpClient client = TcpClient("127.0.0.1", 2080);
-    char op = 0;
+    char op = 'O';
     client.write(op);
-    X509PublicKey key{};
-    client.read(&key);
+    X509PublicKey pkey;
+    client.read(pkey);
     RSA_PKCS1_OAEP en;
-    en.fromX509PublicKey(key);
+    en.fromX509PublicKey(pkey);
 
     RSA_PKCS1_OAEP de;
     de.generateKey();
-    string pkey = de.getX509PublicKey();
+    pkey = X509PublicKey(de.getX509PublicKey());
     client.write(pkey);
 
-    string token = en.encrypt(usertoken);
-    client.write(token);
+    client.write(usertoken);
 
     string response;
-    client.read(response);
-    key = de.decrypt(response);
-    client.read(response);
-    iv = de.decrypt(response);
+    response.resize(128);
+    client.read(response, 128);
+    string key = de.decrypt(response);
+    string iv = key.substr(32, 16);
+    key = key.substr(0, 32);
     AES_CBC aes(key, iv);
-    cout << key << ":" << iv << endl;
+    cout << key << endl << iv << endl;
 
     client.close();
 }

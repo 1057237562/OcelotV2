@@ -5,7 +5,7 @@
 #include <iostream>
 #include <memory>
 #include <stdexcept>
-#include <stdio.h>
+#include <cstdio>
 #include <string>
 #include <vector>
 #define SOCKET_ERROR (-1)
@@ -58,8 +58,8 @@ namespace unisocket {
 #endif
     }
 
-    const int BACKLOG = 2;
-    const int BUFFER_SIZE = 1500; // Default MTU size
+    constexpr int BACKLOG = 1024;
+    constexpr int BUFFER_SIZE = 1500; // Default MTU size
 
     class NetworkStream {
     public:
@@ -133,7 +133,7 @@ namespace unisocket {
             hints.ai_socktype = SOCK_STREAM;
             hints.ai_family = AF_INET;
 
-            if (!getaddrinfo(ip.c_str(), NULL, &hints, &res)) {
+            if (!getaddrinfo(ip.c_str(), nullptr, &hints, &res)) {
                 serverAddr.sin_addr.s_addr = reinterpret_cast<sockaddr_in *>(res->ai_addr)->sin_addr.s_addr;
                 freeaddrinfo(res);
             }
@@ -169,6 +169,11 @@ namespace unisocket {
             }
             memcpy(val, buf, ptr);
             return ptr;
+        }
+
+        template<typename T>
+        int read(T &val) {
+            return read(&val);
         }
 
         int read(std::string &str) {
@@ -236,11 +241,11 @@ namespace unisocket {
             return write(&val);
         }
 
-        bool write(std::string &str, int len) {
+        bool write(char *buf, int len) {
             if (!len)
                 return true;
             int bufsize = len, ptr = 0;
-            int ret = send(socket_fd, str.data(), bufsize, 0);
+            int ret = send(socket_fd, buf, bufsize, 0);
             bufsize -= ret;
             ptr += ret;
             while (bufsize) {
@@ -248,31 +253,15 @@ namespace unisocket {
                     close();
                     return false;
                 }
-                ret = send(socket_fd, str.data() + ptr, bufsize, 0);
+                ret = send(socket_fd, buf + ptr, bufsize, 0);
                 bufsize -= ret;
                 ptr += ret;
             }
             return true;
         }
 
-        bool write(std::string &str) {
-            int bufsize = str.size(), ptr = 0;
-            if (!write(&bufsize))
-                return false;
-
-            int ret = send(socket_fd, str.data(), bufsize, 0);
-            bufsize -= ret;
-            ptr += ret;
-            while (bufsize) {
-                if (ret <= 0) {
-                    close();
-                    return false;
-                }
-                ret = send(socket_fd, str.data() + ptr, bufsize, 0);
-                bufsize -= ret;
-                ptr += ret;
-            }
-            return true;
+        bool write(std::string &str, int len) {
+            return write(str.data(), len);
         }
 
         int Input(std::string &buf) override {
@@ -283,7 +272,7 @@ namespace unisocket {
         }
 
         bool Output(std::string &buf) override {
-            return write(buf, buf.size());
+            return write(buf.data(), buf.size());
         }
 
         void close() {
@@ -305,7 +294,7 @@ namespace unisocket {
         sockaddr_in server_addr{};
 
     public:
-        TcpServer(const std::string &ip, const int port, const int backlog = 1024) {
+        TcpServer(const std::string &ip, const int port, const int backlog = BACKLOG) {
             server_addr.sin_family = AF_INET;
             server_addr.sin_port = htons(port);
             server_addr.sin_addr.s_addr = inet_addr(ip.c_str());

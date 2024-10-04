@@ -9,7 +9,7 @@ add_executable(OcelotServer
         io.hpp
         serverside.cpp
         crypto.hpp
-        crypto.
+        crypto
         unisocket
         unisocket.hpp
         wepoll.c
@@ -21,7 +21,7 @@ add_executable(OcelotClient
         io.hpp
         clientside.cpp
         crypto.hpp
-        crypto.
+        crypto
         unisocket
         unisocket.hpp
         wepoll.c
@@ -32,10 +32,14 @@ add_executable(OcelotClient
 add_executable(OcelotTest
         io.hpp
         test.cpp
+        crypto.hpp
+        crypto
         unisocket
         unisocket.hpp
         wepoll.c
-        wepoll.h)
+        wepoll.h
+        libocelot.hpp
+        libocelot)
 
 find_package(OpenSSL REQUIRED)
 if (WIN32)
