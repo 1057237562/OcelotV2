@@ -1,6 +1,7 @@
 #ifndef _CRYPTO_HPP_
 #define _CRYPTO_HPP_
 #include <functional>
+#include <memory>
 #include <openssl/aes.h>
 #include <openssl/engine.h>
 #include <openssl/evp.h>
@@ -40,8 +41,9 @@ namespace crypto {
         return std::string(hash, hash + SHA256_DIGEST_LENGTH);
     }
 
-    inline std::string random_string(const size_t length, const unsigned int seed = time(nullptr)) {
-        std::default_random_engine engine(seed);
+    static std::mt19937 engine(time(nullptr));
+
+    inline std::string random_string(const size_t length) {
         std::uniform_int_distribution<char> dist;
         std::string str(length, 0);
         for (size_t i = 0; i < length; i++) {
@@ -75,7 +77,7 @@ namespace crypto {
         virtual std::string getPrivateKey() const = 0;
     };
 
-    class ChaCha20 : public SymmetricCrypto {
+    class ChaCha20 final : public SymmetricCrypto {
     protected:
         byte key[256]{};
         byte iv[128]{};
@@ -83,13 +85,14 @@ namespace crypto {
     public:
         ChaCha20() = default;
 
+        ChaCha20(const ChaCha20 &) = delete;
+
         ChaCha20(char KEY[256], char IV[128]) {
             memcpy(key, KEY, sizeof(key));
             memcpy(iv, IV, sizeof(iv));
         }
 
         void setKey(std::string &key) override {
-            std::default_random_engine engine;
             std::hash<std::string> hash_fn;
             engine.seed(hash_fn(key));
             std::uniform_int_distribution<byte> dist;
@@ -173,7 +176,7 @@ namespace crypto {
         }
     };
 
-    class AES_CBC : public SymmetricCrypto {
+    class AES_CBC final : public SymmetricCrypto {
     protected:
         std::string key;
         std::string iv;
@@ -181,12 +184,13 @@ namespace crypto {
     public:
         AES_CBC() = default;
 
-        AES_CBC(std::string KEY, std::string IV) : key(std::move(KEY)), iv(std::move(IV)) {
-        }
+        AES_CBC(const AES_CBC &) = delete;
+
+        AES_CBC(std::string KEY, std::string IV) : key(std::move(KEY)), iv(std::move(IV)) {}
 
         void setKey(std::string &key) override {
             constexpr std::hash<std::string> hash_fn;
-            std::default_random_engine engine(hash_fn(key));
+            std::mt19937 engine(hash_fn(key));
             std::uniform_int_distribution<char> dist;
             this->key.resize(32);
             this->iv.resize(16);
@@ -265,23 +269,36 @@ namespace crypto {
         }
     };
 
-    class RSA_PKCS1_OAEP : public AsymmetricCrypto {
+    class RSA_PKCS1_OAEP final : public AsymmetricCrypto {
     protected:
-        EVP_PKEY *rsa;
+        EVP_PKEY *rsa = nullptr;
 
     public:
-        RSA_PKCS1_OAEP() {
-        }
+        RSA_PKCS1_OAEP() = default;
+
+        RSA_PKCS1_OAEP(const RSA_PKCS1_OAEP &) = delete;
 
         void generateKey() override {
+            release();
             rsa = EVP_RSA_gen(1024);
             if (!rsa) {
                 throw std::runtime_error("Failed to generate RSA key");
             }
         }
 
+        ~RSA_PKCS1_OAEP() override {
+            EVP_PKEY_free(rsa);
+        }
+
+        void release() {
+            if (rsa != nullptr) {
+                EVP_PKEY_free(rsa);
+                rsa = nullptr;
+            }
+        }
+
         void fromPublicKey(std::string &key) override {
-            rsa = nullptr;
+            release();
             BIO *bio = BIO_new(BIO_s_mem());
             if (!bio) {
                 throw std::runtime_error("Failed to create BIO");
@@ -299,7 +316,7 @@ namespace crypto {
         }
 
         void fromX509PublicKey(std::string &key) {
-            rsa = nullptr;
+            release();
             BIO *bio = BIO_new(BIO_s_mem());
             if (!bio) {
                 throw std::runtime_error("Failed to create BIO");
@@ -392,7 +409,8 @@ namespace crypto {
 
             cipher.resize(outlen);
 
-            if (EVP_PKEY_encrypt(ctx, (byte *) cipher.data(), &outlen, (byte *) in.data(), in.size()) <= 0) {
+            if (EVP_PKEY_encrypt(ctx, reinterpret_cast<byte *>(cipher.data()), &outlen,
+                                 reinterpret_cast<byte *>(in.data()), in.size()) <= 0) {
                 EVP_PKEY_CTX_free(ctx);
                 throw std::runtime_error("Failed to encrypt data");
             }
@@ -416,14 +434,15 @@ namespace crypto {
                 EVP_PKEY_CTX_free(ctx);
                 throw std::runtime_error("Failed to set rsa padding");
             }
-            if (EVP_PKEY_decrypt(ctx, nullptr, &outlen, (byte *) in.data(), in.size()) <= 0) {
+            if (EVP_PKEY_decrypt(ctx, nullptr, &outlen, reinterpret_cast<byte *>(in.data()), in.size()) <= 0) {
                 EVP_PKEY_CTX_free(ctx);
                 throw std::runtime_error("Failed to determine buffer length");
             }
 
             plaintext.resize(outlen);
 
-            if (EVP_PKEY_decrypt(ctx, (byte *) plaintext.data(), &outlen, (byte *) in.data(), in.size()) <= 0) {
+            if (EVP_PKEY_decrypt(ctx, reinterpret_cast<byte *>(plaintext.data()), &outlen,
+                                 reinterpret_cast<byte *>(in.data()), in.size()) <= 0) {
                 EVP_PKEY_CTX_free(ctx);
                 throw std::runtime_error("Failed to decrypt data");
             }

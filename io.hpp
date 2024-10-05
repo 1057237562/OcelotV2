@@ -3,6 +3,7 @@
 
 #include "unisocket.hpp"
 #include <atomic>
+#include <cassert>
 #include <future>
 #include <map>
 #include <mutex>
@@ -58,6 +59,7 @@ namespace io {
 
         template<typename T>
         void read(function<void(T, SOCKET)> func) {
+            if (this == nullptr) return;
             que.emplace(sizeof(T), [=](char *buf, int, SOCKET socket, PassiveSocket *) {
                 T *val = (T *) buf;
                 func(*val, socket);
@@ -70,6 +72,7 @@ namespace io {
 
         template<typename T>
         void read(function<void(T, SOCKET, PassiveSocket *)> func) {
+            if (this == nullptr) return;
             que.emplace(sizeof(T), [=](char *buf, int, SOCKET socket, PassiveSocket *current) {
                 T *val = (T *) buf;
                 func(*val, socket, current);
@@ -82,6 +85,7 @@ namespace io {
 
         template<typename T>
         void read(T *val) {
+            if (this == nullptr) return;
             que.emplace(sizeof(T), [=, this](char *buf, int, SOCKET) {
                 memcpy(val, static_cast<T *>(buf), sizeof(T));
             });
@@ -92,6 +96,7 @@ namespace io {
         }
 
         void copyTo(const shared_ptr<TcpClient> &target) {
+            if (this == nullptr) return;
             while (!que.empty())
                 que.pop();
             que.emplace(-1, [=](char *buf, int len, SOCKET, PassiveSocket *) {
@@ -104,7 +109,8 @@ namespace io {
         }
 
         int recvData(SOCKET socket) {
-            int r;
+            int r = 0;
+            if (this == nullptr) return r;
             if ((r = recv(socket, buffer.data() + ptr, buffer.size() - ptr, 0)) > 0) {
                 ptr += r;
                 auto top = que.front();
@@ -150,37 +156,38 @@ namespace io {
             if (th.joinable())
                 th.join();
             th = thread([&]() {
-                    while (conn) {
-                        cout << "Incoming Transmission " << conn << endl;
-                        if (int r = epoll_wait(epoll_fd, events, 1024, -1)) {
-                            if (r == -1) {
-                                cerr << "epoll_wait failed" << endl;
-                                close();
-                            }
-                            for (int i = 0; i < r; i++) {
-                                TcpClient client(events[i].data.fd);
-                                if (events[i].events & EPOLLHUP) {
+                while (conn) {
+                    cout << "Incoming Transmission " << conn << endl;
+                    if (int r = epoll_wait(epoll_fd, events, 1024, -1)) {
+                        if (r == -1) {
+                            cerr << "epoll_wait failed" << endl;
+                            close();
+                        }
+                        for (int i = 0; i < r; i++) {
+                            TcpClient client(events[i].data.fd);
+                            if (events[i].events & EPOLLIN) {
+                                if (mp[events[i].data.fd]->recvData(events[i].data.fd) == 0) {
                                     unregisterSocket(client);
                                 }
-                                if (events[i].events & EPOLLIN) {
-                                    if (mp[events[i].data.fd]->recvData(events[i].data.fd) == 0) {
-                                        unregisterSocket(client);
-                                    }
+                            }
+                            if (events[i].events & EPOLLHUP) {
+                                while (!mp[events[i].data.fd]->recvData(events[i].data.fd)) {
                                 }
+                                unregisterSocket(client);
                             }
                         }
                     }
                 }
-
-            );
+                cout << "Epoll thread exit" << endl;
+            });
         }
 
         void modifySocket(const SOCKET &socket_fd, const shared_ptr<PassiveSocket> &passive) {
-            mp[socket_fd] = shared_ptr(passive);
+            mp[socket_fd] = passive;
         }
 
         void registerSocket(const shared_ptr<TcpClient> &socket, const shared_ptr<PassiveSocket> &passive) {
-            mp[socket->getFD()] = shared_ptr(passive);
+            mp[socket->getFD()] = passive;
             epoll_event event{};
             event.events = {EPOLLIN};
             event.data.fd = socket->getFD();
@@ -202,6 +209,7 @@ namespace io {
                 epoll_close(epoll_fd);
             }
             socket.close();
+            mp[socket.getFD()].reset();
             --conn;
         }
 
