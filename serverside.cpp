@@ -1,19 +1,19 @@
-#include "crypt"
+#include "crypto"
 #include "libocelot"
 #include "unisocket"
 #include <fstream>
 #include <iostream>
 
-int main(int c,char** argv)
-{
+int main(int c, char **argv) {
     using namespace unisocket;
     using namespace std;
     using namespace crypto;
+    init();
     string cfgpath = "./cfg";
-    for(int i = 0; i < c; i ++){
-        string arg = string(argv[i],strlen(argv[i]));
-        if(arg == "-cfg"){
-            cfgpath = string(argv[i+1],strlen(argv[i+1]));
+    for (int i = 0; i < c; i++) {
+        string arg = string(argv[i], strlen(argv[i]));
+        if (arg == "-cfg") {
+            cfgpath = string(argv[i + 1], strlen(argv[i + 1]));
             ++i;
         }
     }
