@@ -44,104 +44,130 @@
 #define endl '\n'
 
 namespace io {
+    class Epoll;
     using namespace std;
     using namespace unisocket;
 
     class PassiveSocket {
-        string buffer;
+    protected:
+        string rd_buffer;
+        string wr_buffer;
         size_t ptr = 0;
         queue<pair<size_t, function<void(char *, int, SOCKET, PassiveSocket *)> > > que;
 
     public:
-        ~PassiveSocket() {
+        PassiveSocket() = default;
+
+        virtual ~PassiveSocket() {
             cout << "Passive Socket deleted " << this << endl;
         }
 
         template<typename T>
         void read(function<void(T, SOCKET)> func) {
-            if (this == nullptr) return;
             que.emplace(sizeof(T), [=](char *buf, int, SOCKET socket, PassiveSocket *) {
                 T *val = (T *) buf;
                 func(*val, socket);
             });
-            if (buffer.empty()) {
-                buffer.resize(sizeof(T));
+            if (rd_buffer.empty()) {
+                rd_buffer.resize(sizeof(T));
                 ptr = 0;
             }
         }
 
         template<typename T>
         void read(function<void(T, SOCKET, PassiveSocket *)> func) {
-            if (this == nullptr) return;
             que.emplace(sizeof(T), [=](char *buf, int, SOCKET socket, PassiveSocket *current) {
                 T *val = (T *) buf;
                 func(*val, socket, current);
             });
-            if (buffer.empty()) {
-                buffer.resize(sizeof(T));
+            if (rd_buffer.empty()) {
+                rd_buffer.resize(sizeof(T));
                 ptr = 0;
             }
         }
 
         template<typename T>
         void read(T *val) {
-            if (this == nullptr) return;
             que.emplace(sizeof(T), [=, this](char *buf, int, SOCKET) {
                 memcpy(val, static_cast<T *>(buf), sizeof(T));
             });
-            if (buffer.empty()) {
-                buffer.resize(sizeof(T));
+            if (rd_buffer.empty()) {
+                rd_buffer.resize(sizeof(T));
                 ptr = 0;
             }
         }
 
-        void copyTo(const shared_ptr<TcpClient> &target) {
-            if (this == nullptr) return;
+        template<typename T>
+        void write(T *val) {
+            wr_buffer.append((char *) val, sizeof(T));
+        }
+
+        template<typename T>
+        void write(T &val) {
+            return write(&val);
+        }
+
+        virtual void copyTo(const shared_ptr<TcpClient> &target) {
             while (!que.empty())
                 que.pop();
             que.emplace(-1, [=](char *buf, int len, SOCKET, PassiveSocket *) {
                 target->write(buf, len);
             });
-            if (buffer.empty()) {
-                buffer.resize(MTU);
+            if (rd_buffer.empty()) {
+                rd_buffer.resize(MTU);
                 ptr = 0;
             }
         }
 
-        int recvData(SOCKET socket) {
+        virtual int recvData(SOCKET socket) {
             int r = 0;
-            if (this == nullptr) return r;
-            if ((r = recv(socket, buffer.data() + ptr, buffer.size() - ptr, 0)) > 0) {
+            if ((r = recv(socket, rd_buffer.data() + ptr, rd_buffer.size() - ptr, 0)) > 0) {
                 ptr += r;
                 auto top = que.front();
-                if (ptr == buffer.size()) {
+                if (ptr == rd_buffer.size()) {
                     que.pop();
-                    top.second(buffer.data(), static_cast<int>(ptr), socket, this);
-                    if (this == nullptr)return r;
+                    top.second(rd_buffer.data(), static_cast<int>(ptr), socket, this);
                     if (!que.empty()) {
                         top = que.front();
-                        buffer.resize(top.first);
+                        rd_buffer.resize(top.first);
                         ptr = 0;
                     }
                 }
-                if (top.first == -1) {
-                    top.second(buffer.data(), static_cast<int>(ptr), socket, this);
-                    ptr = 0;
+                if (top.first < 0 && ptr >= -top.first) {
+                    size_t len = ptr - ptr % -top.first;
+                    top.second(rd_buffer.data(), static_cast<int>(len), socket, this);
+                    rd_buffer = rd_buffer.substr(len);
+                    ptr %= -top.first;
                 }
             }
             return r;
         }
+
+        virtual int sendData(SOCKET socket) {
+            int r = 0;
+            if (wr_buffer.empty()) return 0;
+            if ((r = send(socket, wr_buffer.data(), wr_buffer.size(), 0)) > 0) {
+                wr_buffer = wr_buffer.substr(r);
+            }
+            return r;
+        }
+
+        bool empty() const {
+            return wr_buffer.empty();
+        }
     };
 
     class Epoll {
+    protected:
         HANDLE epoll_fd;
-        atomic_int conn;
+        atomic_int conn{};
         thread th;
         shared_ptr<PassiveSocket> mp[FD_MAX];
-        epoll_event events[1024];
+        epoll_event events[1024]{};
+        uint32_t mode;
 
     public:
-        Epoll() {
+        explicit Epoll(uint32_t mode = EPOLLIN) : mode(mode) {
             epoll_fd = epoll_create1(0);
             conn = 0;
         }
@@ -150,6 +176,17 @@ namespace io {
             epoll_close(epoll_fd);
             if (th.joinable())
                 th.join();
+        }
+
+        void modifySocket(SOCKET socket_fd, const uint32_t m) const {
+            epoll_event event{};
+            event.events = m;
+            event.data.fd = socket_fd;
+            if (epoll_ctl(epoll_fd, EPOLL_CTL_MOD, socket_fd, &event) == -1) {
+                cerr << "epoll_ctl failed" << endl;
+                closesocket(socket_fd);
+                epoll_close(epoll_fd);
+            }
         }
 
         void syncEpollThread() {
@@ -165,14 +202,26 @@ namespace io {
                         }
                         for (int i = 0; i < r; i++) {
                             TcpClient client(events[i].data.fd);
+                            shared_ptr<PassiveSocket> current = mp[events[i].data.fd];
+                            if (current == nullptr) {
+                                unregisterSocket(client);
+                                continue;
+                            }
                             if (events[i].events & EPOLLIN) {
-                                if (mp[events[i].data.fd]->recvData(events[i].data.fd) == 0) {
+                                if (current->recvData(events[i].data.fd) == 0) {
                                     unregisterSocket(client);
+                                }
+                                if (!current->empty()) {
+                                    modifySocket(events[i].data.fd, EPOLLOUT);
+                                }
+                            }
+                            if (events[i].events & EPOLLOUT) {
+                                if (current->sendData(events[i].data.fd) == 0) {
+                                    modifySocket(events[i].data.fd, mode);
                                 }
                             }
                             if (events[i].events & EPOLLHUP) {
-                                while (!mp[events[i].data.fd]->recvData(events[i].data.fd)) {
-                                }
+                                while (!current->recvData(events[i].data.fd)) {}
                                 unregisterSocket(client);
                             }
                         }
@@ -182,14 +231,10 @@ namespace io {
             });
         }
 
-        void modifySocket(const SOCKET &socket_fd, const shared_ptr<PassiveSocket> &passive) {
-            mp[socket_fd] = passive;
-        }
-
         void registerSocket(const shared_ptr<TcpClient> &socket, const shared_ptr<PassiveSocket> &passive) {
             mp[socket->getFD()] = passive;
             epoll_event event{};
-            event.events = {EPOLLIN};
+            event.events = mode;
             event.data.fd = socket->getFD();
             if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, socket->getFD(), &event) == -1) {
                 cerr << "epoll_ctl failed" << endl;
@@ -209,7 +254,9 @@ namespace io {
                 epoll_close(epoll_fd);
             }
             socket.close();
-            mp[socket.getFD()].reset();
+            if (mp[socket.getFD()] != nullptr) {
+                mp[socket.getFD()].reset();
+            }
             --conn;
         }
 

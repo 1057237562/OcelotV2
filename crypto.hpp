@@ -21,13 +21,19 @@ namespace crypto {
 
         X509PublicKey() = default;
 
-        X509PublicKey(const std::string &key) { memcpy(data, key.data(), 162); }
+        explicit X509PublicKey(const std::string &key) { memcpy(data, key.data(), 162); }
     };
 
     struct SHA256Digest {
         char data[32]{};
 
-        SHA256Digest(const std::string &md) { memcpy(data, md.data(), 32); }
+        explicit SHA256Digest(const std::string &md) { memcpy(data, md.data(), 32); }
+    };
+
+    struct AESBlock {
+        char data[128]{};
+
+        explicit AESBlock(const std::string &key) { memcpy(data, key.data(), 128); }
     };
 
     inline std::string sha256_string(const std::string &in) {
@@ -38,7 +44,7 @@ namespace crypto {
         unsigned int len = 0;
         EVP_DigestFinal_ex(sha256, hash, &len);
         EVP_MD_CTX_destroy(sha256);
-        return std::string(hash, hash + SHA256_DIGEST_LENGTH);
+        return {hash, hash + SHA256_DIGEST_LENGTH};
     }
 
     static std::mt19937 engine(time(nullptr));
@@ -159,13 +165,14 @@ namespace crypto {
 
             int len;
             plaintext.resize(in.size());
-            if (EVP_DecryptUpdate(ctx, (byte *) plaintext.data(), &len, (byte *) in.data(), in.size()) != 1) {
+            if (EVP_DecryptUpdate(ctx, reinterpret_cast<byte *>(plaintext.data()), &len,
+                                  reinterpret_cast<byte *>(in.data()), in.size()) != 1) {
                 EVP_CIPHER_CTX_free(ctx);
                 throw std::runtime_error("Failed to decrypt data");
             }
 
             int padding_len;
-            if (EVP_DecryptFinal_ex(ctx, (byte *) plaintext.data() + len, &padding_len) != 1) {
+            if (EVP_DecryptFinal_ex(ctx, reinterpret_cast<byte *>(plaintext.data()) + len, &padding_len) != 1) {
                 EVP_CIPHER_CTX_free(ctx);
                 throw std::runtime_error("Failed to finalize decryption");
             }
@@ -210,7 +217,8 @@ namespace crypto {
             }
             std::string tkey = key;
             std::string tiv = iv;
-            if (EVP_EncryptInit_ex(ctx, EVP_aes_256_cbc(), nullptr, (byte *) tkey.data(), (byte *) tiv.data()) != 1) {
+            if (EVP_EncryptInit_ex(ctx, EVP_aes_256_cbc(), nullptr, reinterpret_cast<byte *>(tkey.data()),
+                                   reinterpret_cast<byte *>(tiv.data())) != 1) {
                 EVP_CIPHER_CTX_free(ctx);
                 throw std::runtime_error("Failed to initialize encryption");
             }
@@ -218,14 +226,15 @@ namespace crypto {
             EVP_CIPHER_CTX_set_padding(ctx, EVP_PADDING_PKCS7);
             int len;
             ciphertext.resize(in.size() + EVP_CIPHER_block_size(EVP_aes_256_cbc()));
-            if (EVP_EncryptUpdate(ctx, (byte *) ciphertext.data(), &len, reinterpret_cast<const byte *>(in.data()),
+            if (EVP_EncryptUpdate(ctx, reinterpret_cast<byte *>(ciphertext.data()), &len,
+                                  reinterpret_cast<const byte *>(in.data()),
                                   in.size()) != 1) {
                 EVP_CIPHER_CTX_free(ctx);
                 throw std::runtime_error("Failed to encrypt data");
             }
 
             int padding_len;
-            if (EVP_EncryptFinal_ex(ctx, (byte *) ciphertext.data() + len, &padding_len) != 1) {
+            if (EVP_EncryptFinal_ex(ctx, reinterpret_cast<byte *>(ciphertext.data()) + len, &padding_len) != 1) {
                 EVP_CIPHER_CTX_free(ctx);
                 throw std::runtime_error("Failed to finalize encryption");
             }
@@ -243,7 +252,8 @@ namespace crypto {
             }
             std::string tkey = key;
             std::string tiv = iv;
-            if (EVP_DecryptInit_ex(ctx, EVP_aes_256_cbc(), nullptr, (byte *) tkey.data(), (byte *) tiv.data()) != 1) {
+            if (EVP_DecryptInit_ex(ctx, EVP_aes_256_cbc(), nullptr, reinterpret_cast<byte *>(tkey.data()),
+                                   reinterpret_cast<byte *>(tiv.data())) != 1) {
                 EVP_CIPHER_CTX_free(ctx);
                 throw std::runtime_error("Failed to initialize decryption");
             }
@@ -252,13 +262,14 @@ namespace crypto {
 
             int len;
             plaintext.resize(in.size());
-            if (EVP_DecryptUpdate(ctx, (byte *) plaintext.data(), &len, (byte *) in.data(), in.size()) != 1) {
+            if (EVP_DecryptUpdate(ctx, reinterpret_cast<byte *>(plaintext.data()), &len,
+                                  reinterpret_cast<byte *>(in.data()), in.size()) != 1) {
                 EVP_CIPHER_CTX_free(ctx);
                 throw std::runtime_error("Failed to decrypt data");
             }
 
             int padding_len;
-            if (EVP_DecryptFinal_ex(ctx, (byte *) plaintext.data() + len, &padding_len) != 1) {
+            if (EVP_DecryptFinal_ex(ctx, reinterpret_cast<byte *>(plaintext.data()) + len, &padding_len) != 1) {
                 EVP_CIPHER_CTX_free(ctx);
                 throw std::runtime_error("Failed to finalize decryption");
             }
@@ -315,7 +326,7 @@ namespace crypto {
             BIO_free(bio);
         }
 
-        void fromX509PublicKey(std::string &key) {
+        void fromX509PublicKey(const std::string &key) {
             release();
             BIO *bio = BIO_new(BIO_s_mem());
             if (!bio) {
@@ -402,7 +413,7 @@ namespace crypto {
                 EVP_PKEY_CTX_free(ctx);
                 throw std::runtime_error("Failed to set rsa padding");
             }
-            if (EVP_PKEY_encrypt(ctx, nullptr, &outlen, (byte *) in.data(), in.size()) <= 0) {
+            if (EVP_PKEY_encrypt(ctx, nullptr, &outlen, reinterpret_cast<byte *>(in.data()), in.size()) <= 0) {
                 EVP_PKEY_CTX_free(ctx);
                 throw std::runtime_error("Failed to determine buffer length");
             }

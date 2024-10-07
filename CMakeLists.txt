@@ -27,8 +27,7 @@ add_executable(OcelotClient
         wepoll.c
         wepoll.h
         libocelot.hpp
-        libocelot
-        stest.cpp)
+        libocelot)
 
 add_executable(CTest
         io.hpp

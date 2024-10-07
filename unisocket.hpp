@@ -260,7 +260,7 @@ namespace unisocket {
             return true;
         }
 
-        bool write(std::string &str, int len) {
+        bool write(std::string &str, const int len) {
             return write(str.data(), len);
         }
 

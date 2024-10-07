@@ -35,14 +35,61 @@ namespace ocelot {
 
     typedef unsigned char byte;
 
+    inline NetworkAddr parseAddr(string buffer) {
+        // This is Socks5
+        NetworkAddr res = {"", -1};
+        if (buffer.empty())
+            return res;
+        switch (buffer[3]) {
+            case 0x01:
+                buffer = buffer.substr(4);
+                res.ip = to_string((byte) buffer[0]) + "." + to_string((byte) buffer[1]) + "." +
+                         to_string((byte) buffer[2]) + "." + to_string((byte) buffer[3]);
+                buffer = buffer.substr(4);
+                break;
+            case 0x03:
+                buffer = buffer.substr(4);
+                byte len;
+                memcpy(&len, buffer.data(), 1);
+                buffer = buffer.substr(1);
+                res.ip = buffer.substr(0, len);
+                buffer = buffer.substr(len);
+                break;
+            case 0x04:
+                buffer = buffer.substr(4);
+            // not support IPV6 for now
+            // res.ip = "[" + buffer.substr(0, 4) + ":" + buffer.substr(4, 4) + ":" + buffer.substr(8, 4) + ":" + buffer.substr(12, 4) + "]";
+                buffer = buffer.substr(16);
+                break;
+            default: cerr << "Invalid network address format" << endl;
+        }
+        res.port = static_cast<int>(static_cast<byte>(buffer[0])) << 8 | static_cast<int>(static_cast<byte>(buffer[1]));
+        return res;
+    }
+
     class PassiveOcelotChannel : public PassiveSocket {
     protected:
-        shared_ptr<RSA_PKCS1_OAEP> encryptor;
         shared_ptr<AES_CBC> aes;
+        NetworkAddr addr;
 
     public:
-        PassiveOcelotChannel(shared_ptr<RSA_PKCS1_OAEP> en, shared_ptr<AES_CBC> aes) : encryptor(std::move(en)),
-            aes(std::move(aes)) {}
+        explicit PassiveOcelotChannel(shared_ptr<AES_CBC> aes, NetworkAddr addr) : aes(std::move(aes)),
+            addr(std::move(addr)) {}
+
+        void copyTo(const shared_ptr<TcpClient> &target) override {
+            if (this == nullptr) return;
+            while (!que.empty())
+                que.pop();
+            que.emplace(-128, [=](const char *buf, const int len, SOCKET, PassiveSocket *) {
+                string encode(buf, len);
+                string decode = aes->decrypt(encode);
+                target->write(decode, static_cast<int>(decode.length()));
+            });
+            if (rd_buffer.empty()) {
+                rd_buffer.resize(MTU);
+                ptr = 0;
+            }
+        }
     };
 
     class PassiveOcelotControl : public PassiveSocket {
@@ -50,37 +97,75 @@ namespace ocelot {
         shared_ptr<RSA_PKCS1_OAEP> encryptor = make_shared<RSA_PKCS1_OAEP>();
         shared_ptr<AES_CBC> aes;
         shared_ptr<RSA_PKCS1_OAEP> decrypter;
+        shared_ptr<Epoll> allocated_epoll;
         vector<string> &tks;
+        map<string, shared_ptr<AES_CBC> > &keys;
 
     public:
-        PassiveOcelotControl(shared_ptr<RSA_PKCS1_OAEP> de, vector<string> &tokens) : decrypter(std::move(de)),
-            tks(tokens) {
-            read<char>([=](const char op, const SOCKET socket_fd, PassiveSocket *passive_socket) {
+        PassiveOcelotControl(shared_ptr<RSA_PKCS1_OAEP> de, shared_ptr<Epoll> allocate, vector<string> &tokens,
+                             map<string, shared_ptr<AES_CBC> > &mp) : decrypter(std::move(de)),
+                                                                      allocated_epoll(std::move(allocate)),
+                                                                      tks(tokens), keys(mp) {
+            read<char>([&](const char op, const SOCKET socket_fd, PassiveSocket *passive_socket) {
                 if ((op ^ 'O') == 0) {
-                    TcpClient outbound(socket_fd);
                     X509PublicKey pkey(decrypter->getX509PublicKey());
-                    outbound.write(pkey);
+                    passive_socket->write(pkey);
 
                     passive_socket->read<X509PublicKey>([](X509PublicKey key, SOCKET, PassiveSocket *control) {
                         reinterpret_cast<PassiveOcelotControl *>(control)->encryptor->fromX509PublicKey(key);
                     });
                     passive_socket->read<SHA256Digest>(
                         [=](const SHA256Digest &digest, const SOCKET socket, PassiveSocket *control) {
-                            TcpClient inbound(socket);
                             int state = 0;
-                            if (binary_search(tks.begin(), tks.end(), string(digest.data, 32))) {
+                            string token = string(digest.data, 32);
+                            if (binary_search(tks.begin(), tks.end(), token)) {
                                 state = 1;
+                                passive_socket->write(&state);
                                 string key = random_string(32 + 16), iv = key.substr(32, 16);
-                                string ekey = reinterpret_cast<PassiveOcelotControl *>(control)->encryptor->
-                                        encrypt(key);
+                                auto ekey = AESBlock(reinterpret_cast<PassiveOcelotControl *>(control)->encryptor->
+                                    encrypt(key));
                                 key = key.substr(0, 32);
-                                AES_CBC aes(key, iv);
-                                inbound.write(ekey, 128);
+                                keys[token] = make_shared<AES_CBC>(key, iv);
+                                passive_socket->write(ekey);
+                            } else {
+                                passive_socket->write(&state);
                             }
-                            inbound.write(&state);
                         });
                 }
-                if ((op ^ 'O') == 1) {}
+                if ((op ^ 'O') == 1) {
+                    passive_socket->read<SHA256Digest>(
+                        [&](const SHA256Digest &digest, const SOCKET socket, PassiveSocket *control) {
+                            if (keys.find(digest.data) == keys.end()) {
+                                return;
+                            }
+                            TcpClient outbound(socket);
+                            TcpServer transmit("0.0.0.0", 0);
+                            int port_num = transmit.getPort();
+                            string port((char *) &port_num, 4);
+                            const auto aes = keys[digest.data];
+                            auto aes_block = AESBlock(aes->encrypt(port));
+                            outbound.write(aes_block);
+                            const auto request = shared_ptr<TcpClient>(transmit.accept(5));
+                            transmit.close();
+                            if (request != nullptr) {
+                                return;
+                            }
+                            passive_socket->read<AESBlock>(
+                                [request,aes](const AESBlock &block, SOCKET, PassiveSocket *control) {
+                                    string block_str(block.data);
+                                    NetworkAddr addr = parseAddr(aes->decrypt(block_str));
+                                    shared_ptr<TcpClient> target = make_shared<TcpClient>(addr.ip, addr.port);
+                                    auto passive = make_shared<PassiveSocket>();
+                                    auto channel = make_shared<PassiveOcelotChannel>(aes, addr);
+                                    reinterpret_cast<PassiveOcelotControl *>(control)->allocated_epoll->registerSocket(
+                                        request, channel);
+                                    reinterpret_cast<PassiveOcelotControl *>(control)->allocated_epoll->registerSocket(
+                                        target, passive);
+                                    passive->copyTo(request);
+                                    channel->copyTo(target);
+                                });
+                        });
+                }
             });
         }
     };
@@ -90,22 +175,29 @@ namespace ocelot {
         TcpServer server;
         vector<string> tokens;
         shared_ptr<RSA_PKCS1_OAEP> de = make_shared<RSA_PKCS1_OAEP>();
+        map<string, shared_ptr<AES_CBC> > keys;
+        vector<shared_ptr<Epoll> > bucket;
         bool closed = false;
 
     public:
-        EpollOcelot(const TcpServer &server, vector<string> tks) : server(server), tokens(std::move(tks)) {
+        EpollOcelot(const TcpServer &server, vector<string> tks,
+                    int core = 1) : server(server), tokens(std::move(tks)) {
             de->generateKey();
             sort(tokens.begin(), tokens.end());
+            bucket.resize(core, make_shared<Epoll>());
         }
 
         ~EpollOcelot() { closed = true; }
 
         void start() {
+            int i = 0;
             while (!closed) {
                 auto client = shared_ptr<TcpClient>(server.accept());
                 client->setRecvTimeout(5);
                 client->setSendTimeout(5);
-                epoll.registerSocket(client, make_shared<PassiveOcelotControl>(de, tokens));
+                epoll.registerSocket(
+                    client, make_shared<PassiveOcelotControl>(de, bucket[i], tokens, keys));
+                i = (i + 1) % bucket.size();
             }
         }
     };
@@ -155,7 +247,7 @@ namespace ocelot {
                 if (!socket->read(buf, len))
                     return 0;
                 buf = aes->decrypt(buf);
-            } catch (runtime_error _) {
+            } catch (runtime_error &_) {
                 return 0;
             }
             return buf.length();
@@ -214,37 +306,6 @@ namespace ocelot {
             aes = AES_CBC(key, iv);
         }
     };
-
-    inline NetworkAddr parseAddr(OcelotChannel client, string &buffer) {
-        NetworkAddr res = {"", -1};
-        if (!client.read(buffer))
-            return res;
-        switch (buffer[3]) {
-            case 0x01:
-                buffer = buffer.substr(4);
-                res.ip = to_string((byte) buffer[0]) + "." + to_string((byte) buffer[1]) + "." +
-                         to_string((byte) buffer[2]) + "." + to_string((byte) buffer[3]);
-                buffer = buffer.substr(4);
-                break;
-            case 0x03:
-                buffer = buffer.substr(4);
-                byte len;
-                memcpy(&len, buffer.data(), 1);
-                buffer = buffer.substr(1);
-                res.ip = buffer.substr(0, len);
-                buffer = buffer.substr(len);
-                break;
-            case 0x04:
-                buffer = buffer.substr(4);
-            // not support IPV6 for now
-            // res.ip = "[" + buffer.substr(0, 4) + ":" + buffer.substr(4, 4) + ":" + buffer.substr(8, 4) + ":" + buffer.substr(12, 4) + "]";
-                buffer = buffer.substr(16);
-                break;
-        }
-        res.port = (int) (byte) buffer[0] << 8 | (int) (byte) buffer[1];
-        buffer = buffer.substr(2);
-        return res;
-    }
 
     // class OcelotServer {
     // protected:

@@ -26,15 +26,19 @@ int main() {
     client.write(pkey);
 
     client.write(usertoken);
-
-    string response;
-    response.resize(128);
-    client.read(response, 128);
-    string key = de.decrypt(response);
-    string iv = key.substr(32, 16);
-    key = key.substr(0, 32);
-    AES_CBC aes(key, iv);
-    cout << key << endl << iv << endl;
-
+    int state = 0;
+    client.read(state);
+    if (state) {
+        string response;
+        response.resize(128);
+        client.read(response, 128);
+        string key = de.decrypt(response);
+        string iv = key.substr(32, 16);
+        key = key.substr(0, 32);
+        AES_CBC aes(key, iv);
+        cout << key << endl << iv << endl;
+    } else {
+        cerr << "Certification failed" << endl;
+    }
     client.close();
 }
