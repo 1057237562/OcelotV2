@@ -294,6 +294,8 @@ namespace unisocket {
         sockaddr_in server_addr{};
 
     public:
+        explicit TcpServer(const SOCKET socket) : socket_fd(socket) {}
+
         TcpServer(const std::string &ip, const int port, const int backlog = BACKLOG) {
             server_addr.sin_family = AF_INET;
             server_addr.sin_port = htons(port);

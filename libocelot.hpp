@@ -71,19 +71,28 @@ namespace ocelot {
     protected:
         shared_ptr<AES_CBC> aes;
         NetworkAddr addr;
+        string buffer;
 
     public:
         explicit PassiveOcelotChannel(shared_ptr<AES_CBC> aes, NetworkAddr addr) : aes(std::move(aes)),
             addr(std::move(addr)) {}
 
-        void copyTo(const shared_ptr<TcpClient> &target) override {
-            if (this == nullptr) return;
+        void write(const char *buf, const int len) override {
+            buffer.append(buf, len);
+            while (buffer.size() >= 128) {
+                string plain = buffer.substr(0, 128);
+                wr_buffer.append(aes->encrypt(plain));
+                buffer = buffer.substr(128);
+            }
+        }
+
+        void copyTo(const shared_ptr<PassiveSocket> &target) override {
             while (!que.empty())
                 que.pop();
             que.emplace(-128, [=](const char *buf, const int len, SOCKET, PassiveSocket *) {
                 string encode(buf, len);
                 string decode = aes->decrypt(encode);
-                target->write(decode, static_cast<int>(decode.length()));
+                target->write(decode.c_str(), static_cast<int>(decode.length()));
             });
             if (rd_buffer.empty()) {
                 rd_buffer.resize(MTU);
@@ -161,8 +170,8 @@ namespace ocelot {
                                         request, channel);
                                     reinterpret_cast<PassiveOcelotControl *>(control)->allocated_epoll->registerSocket(
                                         target, passive);
-                                    passive->copyTo(request);
-                                    channel->copyTo(target);
+                                    passive->copyTo(channel);
+                                    channel->copyTo(passive);
                                 });
                         });
                 }
@@ -232,38 +241,6 @@ namespace ocelot {
             if (!socket->read(buf, len))
                 return false;
             str = aes->decrypt(buf);
-            return true;
-        }
-
-        int Input(std::string &buf) override {
-            try {
-                byte header[16];
-                if (!socket->read(&header))
-                    return 0;
-                string slen = string((char *) header, 16);
-                slen = aes->decrypt(slen);
-                int len;
-                memcpy(&len, slen.data(), 4);
-                if (!socket->read(buf, len))
-                    return 0;
-                buf = aes->decrypt(buf);
-            } catch (runtime_error &_) {
-                return 0;
-            }
-            return buf.length();
-        }
-
-        bool Output(std::string &buf) override {
-            std::string data = aes->encrypt(buf);
-
-            int len = data.length();
-            string slen = string((char *) &len, 4);
-            slen = aes->encrypt(slen);
-            if (!socket->write(slen, 16))
-                return false;
-
-            if (!socket->write(data, len))
-                return false;
             return true;
         }
 

@@ -97,9 +97,13 @@ namespace io {
             }
         }
 
+        virtual void write(const char *buf, const int len) {
+            wr_buffer.append(buf, len);
+        }
+
         template<typename T>
         void write(T *val) {
-            wr_buffer.append((char *) val, sizeof(T));
+            write((char *) val, sizeof(T));
         }
 
         template<typename T>
@@ -107,7 +111,7 @@ namespace io {
             return write(&val);
         }
 
-        virtual void copyTo(const shared_ptr<TcpClient> &target) {
+        virtual void copyTo(const shared_ptr<PassiveSocket> &target) {
             while (!que.empty())
                 que.pop();
             que.emplace(-1, [=](char *buf, int len, SOCKET, PassiveSocket *) {
@@ -154,6 +158,20 @@ namespace io {
 
         bool empty() const {
             return wr_buffer.empty();
+        }
+    };
+
+    class PassiveServer : public PassiveSocket {
+    protected:
+        function<void(shared_ptr<TcpClient>)> func;
+
+    public:
+        explicit PassiveServer(function<void(shared_ptr<TcpClient>)> proc) : func(std::move(proc)) {}
+
+        int recvData(SOCKET socket) override {
+            const TcpServer server(socket);
+            func(shared_ptr<TcpClient>(server.accept()));
+            return 1;
         }
     };
 
