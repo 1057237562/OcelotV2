@@ -79,17 +79,17 @@ namespace ocelot {
 
         void write(const char *buf, const int len) override {
             buffer.append(buf, len);
-            while (buffer.size() >= 128) {
-                string plain = buffer.substr(0, 128);
+            while (buffer.size() >= 16) {
+                string plain = buffer.substr(0, 16);
                 wr_buffer.append(aes->encrypt(plain));
-                buffer = buffer.substr(128);
+                buffer = buffer.substr(16);
             }
         }
 
         void copyTo(const shared_ptr<PassiveSocket> &target) override {
             while (!que.empty())
                 que.pop();
-            que.emplace(-128, [=](const char *buf, const int len, SOCKET, PassiveSocket *) {
+            que.emplace(-16, [=](const char *buf, const int len, SOCKET, PassiveSocket *) {
                 string encode(buf, len);
                 string decode = aes->decrypt(encode);
                 target->write(decode.c_str(), static_cast<int>(decode.length()));
@@ -131,7 +131,7 @@ namespace ocelot {
                                 state = 1;
                                 passive_socket->write(&state);
                                 string key = random_string(32 + 16), iv = key.substr(32, 16);
-                                auto ekey = AESBlock(reinterpret_cast<PassiveOcelotControl *>(control)->encryptor->
+                                auto ekey = RSABlock(reinterpret_cast<PassiveOcelotControl *>(control)->encryptor->
                                     encrypt(key));
                                 key = key.substr(0, 32);
                                 keys[token] = make_shared<AES_CBC>(key, iv);
@@ -144,19 +144,20 @@ namespace ocelot {
                 if ((op ^ 'O') == 1) {
                     passive_socket->read<SHA256Digest>(
                         [&](const SHA256Digest &digest, const SOCKET socket, PassiveSocket *control) {
-                            if (keys.find(digest.data) == keys.end()) {
+                            TcpClient outbound(socket);
+                            string token = string(digest.data, 32);
+                            if (keys.find(token) == keys.end()) {
                                 return;
                             }
-                            TcpClient outbound(socket);
                             TcpServer transmit("0.0.0.0", 0);
                             int port_num = transmit.getPort();
                             string port((char *) &port_num, 4);
-                            const auto aes = keys[digest.data];
+                            auto aes = keys[token];
                             auto aes_block = AESBlock(aes->encrypt(port));
                             outbound.write(aes_block);
-                            const auto request = shared_ptr<TcpClient>(transmit.accept(5));
+                            const auto request = shared_ptr<TcpClient>(transmit.accept());
                             transmit.close();
-                            if (request != nullptr) {
+                            if (request == nullptr) {
                                 return;
                             }
                             passive_socket->read<AESBlock>(

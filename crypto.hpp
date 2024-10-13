@@ -30,10 +30,20 @@ namespace crypto {
         explicit SHA256Digest(const std::string &md) { memcpy(data, md.data(), 32); }
     };
 
-    struct AESBlock {
+    struct RSABlock {
         char data[128]{};
 
-        explicit AESBlock(const std::string &key) { memcpy(data, key.data(), 128); }
+        RSABlock() = default;
+
+        explicit RSABlock(const std::string &key) { memcpy(data, key.data(), 128); }
+    };
+
+    struct AESBlock {
+        char data[16]{};
+
+        AESBlock() = default;
+
+        explicit AESBlock(const std::string &key) { memcpy(data, key.data(), 16); }
     };
 
     inline std::string sha256_string(const std::string &in) {
