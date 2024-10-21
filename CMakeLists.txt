@@ -15,7 +15,9 @@ add_executable(OcelotServer
         wepoll.c
         wepoll.h
         libocelot.hpp
-        libocelot)
+        libocelot
+        protocol.hpp
+        protocol)
 
 add_executable(OcelotClient
         io.hpp
@@ -27,7 +29,9 @@ add_executable(OcelotClient
         wepoll.c
         wepoll.h
         libocelot.hpp
-        libocelot)
+        libocelot
+        protocol.hpp
+        protocol)
 
 add_executable(CTest
         io.hpp
@@ -39,7 +43,9 @@ add_executable(CTest
         wepoll.c
         wepoll.h
         libocelot.hpp
-        libocelot)
+        libocelot
+        protocol.hpp
+        protocol)
 
 add_executable(STest
         io.hpp
@@ -51,7 +57,9 @@ add_executable(STest
         wepoll.c
         wepoll.h
         libocelot.hpp
-        libocelot)
+        libocelot
+        protocol.hpp
+        protocol)
 
 find_package(OpenSSL REQUIRED)
 if (WIN32)

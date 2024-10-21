@@ -219,6 +219,11 @@ namespace crypto {
             }
         }
 
+        std::string encrypt(const AESBlock &in) const {
+            auto data = std::string(in.data, sizeof(AESBlock));
+            return encrypt(data);
+        }
+
         std::string encrypt(std::string &in) const override {
             std::string ciphertext;
             EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
@@ -252,6 +257,11 @@ namespace crypto {
             ciphertext.resize(len + padding_len);
             EVP_CIPHER_CTX_free(ctx);
             return ciphertext;
+        }
+
+        std::string decrypt(const AESBlock &in) const {
+            auto data = std::string(in.data, sizeof(AESBlock));
+            return decrypt(data);
         }
 
         std::string decrypt(std::string &in) const override {

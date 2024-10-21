@@ -181,7 +181,7 @@ namespace unisocket {
             if (!read(&bufsize))
                 return false;
             str.resize(std::min(bufsize, BUFFER_SIZE));
-            int ret = recv(socket_fd, const_cast<char *>(str.data()), std::min(bufsize, BUFFER_SIZE), 0);
+            int ret = recv(socket_fd, str.data(), std::min(bufsize, BUFFER_SIZE), 0);
             ptr += ret;
             bufsize -= ret;
             while (bufsize) {
@@ -190,7 +190,7 @@ namespace unisocket {
                     return 0;
                 }
                 str.resize(str.size() + std::min(bufsize, BUFFER_SIZE));
-                ret = recv(socket_fd, const_cast<char *>(str.data()) + ptr, std::min(bufsize, BUFFER_SIZE), 0);
+                ret = recv(socket_fd, str.data() + ptr, std::min(bufsize, BUFFER_SIZE), 0);
                 ptr += ret;
                 bufsize -= ret;
             }
@@ -216,6 +216,10 @@ namespace unisocket {
             }
             str = std::string(buf, ptr);
             return ptr;
+        }
+
+        int receive(char *buf, const int pos, const int size) const {
+            return recv(socket_fd, buf + pos, size, 0);
         }
 
         template<typename T>
@@ -266,7 +270,7 @@ namespace unisocket {
 
         int Input(std::string &buf) override {
             buf.resize(BUFFER_SIZE);
-            int ret = recv(socket_fd, const_cast<char *>(buf.data()), BUFFER_SIZE, 0);
+            int ret = recv(socket_fd, buf.data(), BUFFER_SIZE, 0);
             buf.resize(ret);
             return ret;
         }

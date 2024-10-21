@@ -48,12 +48,13 @@ namespace io {
     using namespace std;
     using namespace unisocket;
 
+
     class PassiveSocket {
     protected:
         string rd_buffer;
         string wr_buffer;
         size_t ptr = 0;
-        queue<pair<size_t, function<void(char *, int, SOCKET, PassiveSocket *)> > > que;
+        queue<pair<size_t, function<void(char *, int, SOCKET, shared_ptr<PassiveSocket>)> > > que;
 
     public:
         PassiveSocket() = default;
@@ -63,20 +64,8 @@ namespace io {
         }
 
         template<typename T>
-        void read(function<void(T, SOCKET)> func) {
-            que.emplace(sizeof(T), [=](char *buf, int, SOCKET socket, PassiveSocket *) {
-                T *val = (T *) buf;
-                func(*val, socket);
-            });
-            if (rd_buffer.empty()) {
-                rd_buffer.resize(sizeof(T));
-                ptr = 0;
-            }
-        }
-
-        template<typename T>
-        void read(function<void(T, SOCKET, PassiveSocket *)> func) {
-            que.emplace(sizeof(T), [=](char *buf, int, SOCKET socket, PassiveSocket *current) {
+        void read(function<void(T, SOCKET, shared_ptr<PassiveSocket>)> func) {
+            que.emplace(sizeof(T), [=](char *buf, int, SOCKET socket, shared_ptr<PassiveSocket> current) {
                 T *val = (T *) buf;
                 func(*val, socket, current);
             });
@@ -88,11 +77,21 @@ namespace io {
 
         template<typename T>
         void read(T *val) {
-            que.emplace(sizeof(T), [=, this](char *buf, int, SOCKET) {
+            que.emplace(sizeof(T), [=](char *buf, int, SOCKET, shared_ptr<PassiveSocket>) {
                 memcpy(val, static_cast<T *>(buf), sizeof(T));
             });
             if (rd_buffer.empty()) {
                 rd_buffer.resize(sizeof(T));
+                ptr = 0;
+            }
+        }
+
+        void read(int len, const function<void(char *, SOCKET, shared_ptr<PassiveSocket>)> &func) {
+            que.emplace(len, [=](char *buf, int, const SOCKET socket, shared_ptr<PassiveSocket> current) {
+                func(buf, socket, current);
+            });
+            if (rd_buffer.empty()) {
+                rd_buffer.resize(len);
                 ptr = 0;
             }
         }
@@ -114,7 +113,7 @@ namespace io {
         virtual void copyTo(const shared_ptr<PassiveSocket> &target) {
             while (!que.empty())
                 que.pop();
-            que.emplace(-1, [=](char *buf, int len, SOCKET, PassiveSocket *) {
+            que.emplace(-1, [=](char *buf, int len, SOCKET, shared_ptr<PassiveSocket>) {
                 target->write(buf, len);
             });
             if (rd_buffer.empty()) {
@@ -123,14 +122,14 @@ namespace io {
             }
         }
 
-        virtual int recvData(SOCKET socket) {
+        virtual int recvData(SOCKET socket, shared_ptr<PassiveSocket> current) {
             int r = 0;
             if ((r = recv(socket, rd_buffer.data() + ptr, rd_buffer.size() - ptr, 0)) > 0) {
                 ptr += r;
                 auto top = que.front();
                 if (ptr == rd_buffer.size()) {
+                    top.second(rd_buffer.data(), static_cast<int>(ptr), socket, current);
                     que.pop();
-                    top.second(rd_buffer.data(), static_cast<int>(ptr), socket, this);
                     if (!que.empty()) {
                         top = que.front();
                         rd_buffer.resize(top.first);
@@ -139,7 +138,7 @@ namespace io {
                 }
                 if (top.first < 0 && ptr >= -top.first) {
                     size_t len = ptr - ptr % -top.first;
-                    top.second(rd_buffer.data(), static_cast<int>(len), socket, this);
+                    top.second(rd_buffer.data(), static_cast<int>(len), socket, current);
                     rd_buffer = rd_buffer.substr(len);
                     ptr %= -top.first;
                 }
@@ -163,24 +162,30 @@ namespace io {
 
     class PassiveServer : public PassiveSocket {
     protected:
-        function<void(shared_ptr<TcpClient>)> func;
+        bool singleUse = false;
+        function<void(shared_ptr<TcpClient>, shared_ptr<PassiveSocket>)> func;
 
     public:
-        explicit PassiveServer(function<void(shared_ptr<TcpClient>)> proc) : func(std::move(proc)) {}
+        explicit PassiveServer(function<void(shared_ptr<TcpClient>, shared_ptr<PassiveSocket>)> proc,
+                               bool singleUse) : func(std::move(proc)), singleUse(singleUse) {}
 
-        int recvData(SOCKET socket) override {
-            const TcpServer server(socket);
-            func(shared_ptr<TcpClient>(server.accept()));
+        int recvData(SOCKET socket, shared_ptr<PassiveSocket> current) override {
+            TcpServer server(socket);
+            func(shared_ptr<TcpClient>(server.accept()), current);
+            if (singleUse) {
+                server.close();
+            }
             return 1;
         }
     };
+
+    inline shared_ptr<PassiveSocket> mp[FD_MAX];
 
     class Epoll {
     protected:
         HANDLE epoll_fd;
         atomic_int conn{};
         thread th;
-        shared_ptr<PassiveSocket> mp[FD_MAX];
         epoll_event events[1024]{};
         uint32_t mode;
 
@@ -212,7 +217,7 @@ namespace io {
                 th.join();
             th = thread([&]() {
                 while (conn) {
-                    cout << "Incoming Transmission " << conn << endl;
+                    cout << "Socket Added " << conn << endl;
                     if (int r = epoll_wait(epoll_fd, events, 1024, -1)) {
                         if (r == -1) {
                             cerr << "epoll_wait failed" << endl;
@@ -226,7 +231,7 @@ namespace io {
                                 continue;
                             }
                             if (events[i].events & EPOLLIN) {
-                                if (current->recvData(events[i].data.fd) == 0) {
+                                if (current->recvData(events[i].data.fd, current) == 0) {
                                     unregisterSocket(client);
                                 }
                                 if (!current->empty()) {
@@ -239,7 +244,7 @@ namespace io {
                                 }
                             }
                             if (events[i].events & EPOLLHUP) {
-                                while (!current->recvData(events[i].data.fd)) {}
+                                while (!current->recvData(events[i].data.fd, current)) {}
                                 unregisterSocket(client);
                             }
                         }
@@ -249,14 +254,13 @@ namespace io {
             });
         }
 
-        void registerSocket(const shared_ptr<TcpClient> &socket, const shared_ptr<PassiveSocket> &passive) {
-            mp[socket->getFD()] = passive;
+        void registerSocket(const SOCKET socket, const shared_ptr<PassiveSocket> &passive) {
+            mp[socket] = passive;
             epoll_event event{};
             event.events = mode;
-            event.data.fd = socket->getFD();
-            if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, socket->getFD(), &event) == -1) {
+            event.data.fd = socket;
+            if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, socket, &event) == -1) {
                 cerr << "epoll_ctl failed" << endl;
-                socket->close();
                 epoll_close(epoll_fd);
                 return;
             }
