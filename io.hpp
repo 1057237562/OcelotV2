@@ -54,7 +54,7 @@ namespace io {
         string rd_buffer;
         string wr_buffer;
         size_t ptr = 0;
-        queue<pair<size_t, function<void(char *, int, SOCKET, shared_ptr<PassiveSocket>)> > > que;
+        queue<pair<long long, function<void(char *, int, SOCKET, shared_ptr<PassiveSocket>)> > > que;
 
     public:
         PassiveSocket() = default;
@@ -113,7 +113,7 @@ namespace io {
         virtual void copyTo(const shared_ptr<PassiveSocket> &target) {
             while (!que.empty())
                 que.pop();
-            que.emplace(-1, [=](char *buf, int len, SOCKET, shared_ptr<PassiveSocket>) {
+            que.emplace(-1, [=](char *buf, int len, SOCKET, const shared_ptr<PassiveSocket> &) {
                 target->write(buf, len);
             });
             if (rd_buffer.empty()) {
@@ -217,7 +217,7 @@ namespace io {
                 th.join();
             th = thread([&]() {
                 while (conn) {
-                    cout << "Socket Added " << conn << endl;
+                    cout << this << "Socket Added " << conn << endl;
                     if (int r = epoll_wait(epoll_fd, events, 1024, -1)) {
                         if (r == -1) {
                             cerr << "epoll_wait failed" << endl;
