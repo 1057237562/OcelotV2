@@ -92,6 +92,8 @@ int main() {
                     n += request->receive(response.data(), n, 8192 - n);
                 }
                 request->write(httpSucceed, httpSucceed.length());
+                response.resize(n);
+                response = HttpToSocks5(response);
                 break;
         }
         if (response.empty()) {

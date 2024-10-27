@@ -8,6 +8,43 @@ namespace protocol {
     inline byte success5[] = {0x05, 0x00, 0x05, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
     inline byte success4[] = {0x00, 0x5A, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 
+    struct NetworkAddr {
+        std::string ip;
+        int port;
+    };
+
+    inline NetworkAddr parseSocks5(std::string buffer) {
+        // This is Socks5
+        NetworkAddr res = {"", -1};
+        if (buffer.empty())
+            return res;
+        switch (buffer[3]) {
+            case 0x01:
+                buffer = buffer.substr(4);
+                res.ip = std::to_string(static_cast<byte>(buffer[0])) + "." + std::to_string(static_cast<byte>(buffer[1])) + "." +
+                         std::to_string(static_cast<byte>(buffer[2])) + "." + std::to_string(static_cast<byte>(buffer[3]));
+                buffer = buffer.substr(4);
+                break;
+            case 0x03:
+                buffer = buffer.substr(4);
+                byte len;
+                memcpy(&len, buffer.data(), 1);
+                buffer = buffer.substr(1);
+                res.ip = buffer.substr(0, len);
+                buffer = buffer.substr(len);
+                break;
+            case 0x04:
+                buffer = buffer.substr(4);
+            // not support IPV6 for now
+            // res.ip = "[" + buffer.substr(0, 4) + ":" + buffer.substr(4, 4) + ":" + buffer.substr(8, 4) + ":" + buffer.substr(12, 4) + "]";
+                buffer = buffer.substr(16);
+                break;
+            default: std::cerr << "Invalid network address format" << endl;
+        }
+        res.port = static_cast<int>(static_cast<byte>(buffer[0])) << 8 | static_cast<int>(static_cast<byte>(buffer[1]));
+        return res;
+    }
+
     inline std::string interceptSocks5(const std::shared_ptr<TcpClient> &stream) {
         std::stringstream ss;
         std::string buffer;

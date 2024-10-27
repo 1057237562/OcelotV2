@@ -61,10 +61,26 @@ add_executable(STest
         protocol.hpp
         protocol)
 
+add_executable(Download
+        io.hpp
+        download.cpp
+        crypto.hpp
+        crypto
+        unisocket
+        unisocket.hpp
+        wepoll.c
+        wepoll.h
+        libocelot.hpp
+        libocelot
+        protocol.hpp
+        protocol)
+
+
 find_package(OpenSSL REQUIRED)
 if (WIN32)
     target_link_libraries(OcelotServer OpenSSL::SSL OpenSSL::Crypto wsock32 ws2_32)
     target_link_libraries(OcelotClient OpenSSL::SSL OpenSSL::Crypto wsock32 ws2_32)
     target_link_libraries(CTest OpenSSL::SSL OpenSSL::Crypto wsock32 ws2_32)
     target_link_libraries(STest OpenSSL::SSL OpenSSL::Crypto wsock32 ws2_32)
+    target_link_libraries(Download OpenSSL::SSL OpenSSL::Crypto wsock32 ws2_32)
 endif ()

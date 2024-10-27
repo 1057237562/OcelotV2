@@ -16,56 +16,16 @@
 #include <thread>
 #include <utility>
 #include <vector>
-
-namespace socks {
-    using namespace std;
-
-    struct NetworkAddr {
-        string ip;
-        int port;
-    };
-}
+#include "protocol.hpp"
 
 namespace ocelot {
     using namespace std;
     using namespace unisocket;
     using namespace crypto;
-    using namespace socks;
+    using namespace protocol;
     using namespace io;
 
     typedef unsigned char byte;
-
-    inline NetworkAddr parseAddr(string buffer) {
-        // This is Socks5
-        NetworkAddr res = {"", -1};
-        if (buffer.empty())
-            return res;
-        switch (buffer[3]) {
-            case 0x01:
-                buffer = buffer.substr(4);
-                res.ip = to_string(static_cast<byte>(buffer[0])) + "." + to_string(static_cast<byte>(buffer[1])) + "." +
-                         to_string(static_cast<byte>(buffer[2])) + "." + to_string(static_cast<byte>(buffer[3]));
-                buffer = buffer.substr(4);
-                break;
-            case 0x03:
-                buffer = buffer.substr(4);
-                byte len;
-                memcpy(&len, buffer.data(), 1);
-                buffer = buffer.substr(1);
-                res.ip = buffer.substr(0, len);
-                buffer = buffer.substr(len);
-                break;
-            case 0x04:
-                buffer = buffer.substr(4);
-            // not support IPV6 for now
-            // res.ip = "[" + buffer.substr(0, 4) + ":" + buffer.substr(4, 4) + ":" + buffer.substr(8, 4) + ":" + buffer.substr(12, 4) + "]";
-                buffer = buffer.substr(16);
-                break;
-            default: cerr << "Invalid network address format" << endl;
-        }
-        res.port = static_cast<int>(static_cast<byte>(buffer[0])) << 8 | static_cast<int>(static_cast<byte>(buffer[1]));
-        return res;
-    }
 
     class PassiveOcelotChannel : public PassiveSocket {
     protected:
@@ -77,20 +37,22 @@ namespace ocelot {
 
         void write(const char *buf, const int len) override {
             buffer.append(buf, len);
-            while (buffer.size() >= sizeof(AESBlock)) {
-                string plain = buffer.substr(0, sizeof(AESBlock));
-                wr_buffer.append(aes->encrypt(plain));
-                buffer = buffer.substr(sizeof(AESBlock));
+            while (!buffer.empty()) {
+                string plain(buffer.begin(), buffer.begin() + static_cast<int>(min(buffer.size(), sizeof(AESBlock) - 1)));
+                PassiveSocket::write(aes->encrypt(plain).data(), sizeof(AESBlock));
+                buffer = buffer.substr(static_cast<int>(min(buffer.size(), sizeof(AESBlock) - 1)));
             }
         }
 
         void copyTo(const shared_ptr<PassiveSocket> &target) override {
             while (!que.empty())
                 que.pop();
-            que.emplace(-sizeof(AESBlock), [=](const char *buf, const int len, SOCKET, shared_ptr<PassiveSocket>) {
-                string encode(buf, len);
-                string decode = aes->decrypt(encode);
-                target->write(decode.c_str(), static_cast<int>(decode.length()));
+            que.emplace(-sizeof(AESBlock), [=](const char *buf, const int len, SOCKET, const shared_ptr<PassiveSocket> &) {
+                for (int i = 0; i < len; i += sizeof(AESBlock)) {
+                    string encode(buf + i, sizeof(AESBlock));
+                    const string decode = aes->decrypt(encode);
+                    target->write(decode.data(), static_cast<int>(decode.length()));
+                }
             });
             if (rd_buffer.empty()) {
                 rd_buffer.resize(MTU);
@@ -152,7 +114,7 @@ namespace ocelot {
                             memcpy(&len, lenstr.c_str(), sizeof(size_t));
                             control->read(static_cast<int>(len), [len,aes](const char *response, SOCKET, const shared_ptr<PassiveSocket> &control) {
                                 string socks = string(response, len);
-                                NetworkAddr addr = parseAddr(aes->decrypt(socks));
+                                NetworkAddr addr = parseSocks5(aes->decrypt(socks));
                                 const TcpServer transmit("0.0.0.0", 0);
                                 int port_num = transmit.getPort();
                                 string port((char *) &port_num, 4);
@@ -161,13 +123,17 @@ namespace ocelot {
                                 auto server = make_shared<PassiveServer>(
                                     [control,aes,addr](const shared_ptr<TcpClient> &request, const shared_ptr<PassiveSocket> &) {
                                         cout << "Connection inbound for " << addr.ip << ":" << addr.port << endl << flush;
-                                        const auto target = make_shared<TcpClient>(addr.ip, addr.port);
-                                        const auto passive = make_shared<PassiveSocket>();
-                                        const auto channel = make_shared<PassiveOcelotChannel>(aes);
-                                        passive->copyTo(channel);
-                                        channel->copyTo(passive);
-                                        reinterpret_cast<PassiveOcelotControl *>(control.get())->allocated_epoll->registerSocket(request->getFD(), channel);
-                                        reinterpret_cast<PassiveOcelotControl *>(control.get())->allocated_epoll->registerSocket(target->getFD(), passive);
+                                        try {
+                                            const auto target = make_shared<TcpClient>(addr.ip, addr.port);
+                                            const auto passive = make_shared<PassiveSocket>();
+                                            const auto channel = make_shared<PassiveOcelotChannel>(aes);
+                                            passive->copyTo(channel);
+                                            channel->copyTo(passive);
+                                            reinterpret_cast<PassiveOcelotControl *>(control.get())->allocated_epoll->registerSocket(request->getFD(), channel);
+                                            reinterpret_cast<PassiveOcelotControl *>(control.get())->allocated_epoll->registerSocket(target->getFD(), passive);
+                                        } catch (runtime_error &e) {
+                                            cout << e.what() << endl << flush;
+                                        }
                                     }, true);
                                 reinterpret_cast<PassiveOcelotControl *>(control.get())->allocated_epoll->registerSocket(transmit.getFD(), server);
                             });

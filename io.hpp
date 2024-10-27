@@ -40,7 +40,7 @@
 #endif
 
 #define FD_MAX 65536
-#define MTU 1500
+#define MTU 8192
 #define endl '\n'
 
 namespace io {
@@ -57,6 +57,9 @@ namespace io {
         queue<pair<long long, function<void(char *, int, SOCKET, shared_ptr<PassiveSocket>)> > > que;
 
     public:
+        HANDLE epoll_fd = nullptr;
+        SOCKET socket_fd = 0;
+
         PassiveSocket() = default;
 
         virtual ~PassiveSocket() {
@@ -71,7 +74,6 @@ namespace io {
             });
             if (rd_buffer.empty()) {
                 rd_buffer.resize(sizeof(T));
-                ptr = 0;
             }
         }
 
@@ -82,7 +84,6 @@ namespace io {
             });
             if (rd_buffer.empty()) {
                 rd_buffer.resize(sizeof(T));
-                ptr = 0;
             }
         }
 
@@ -92,12 +93,17 @@ namespace io {
             });
             if (rd_buffer.empty()) {
                 rd_buffer.resize(len);
-                ptr = 0;
             }
         }
 
         virtual void write(const char *buf, const int len) {
             wr_buffer.append(buf, len);
+            epoll_event event{};
+            event.events = EPOLLOUT;
+            event.data.fd = socket_fd;
+            if (epoll_ctl(epoll_fd, EPOLL_CTL_MOD, socket_fd, &event) == -1) {
+                cerr << "epoll_ctl output failed code: " << getErrorCode() << endl;
+            }
         }
 
         template<typename T>
@@ -113,40 +119,40 @@ namespace io {
         virtual void copyTo(const shared_ptr<PassiveSocket> &target) {
             while (!que.empty())
                 que.pop();
-            que.emplace(-1, [=](char *buf, int len, SOCKET, const shared_ptr<PassiveSocket> &) {
+            que.emplace(-1, [target](char *buf, const int len, SOCKET, const shared_ptr<PassiveSocket> &) {
                 target->write(buf, len);
             });
-            if (rd_buffer.empty()) {
-                rd_buffer.resize(MTU);
-                ptr = 0;
-            }
+            rd_buffer.resize(MTU);
         }
 
         virtual int recvData(SOCKET socket, shared_ptr<PassiveSocket> current) {
             int r = 0;
             if ((r = recv(socket, rd_buffer.data() + ptr, rd_buffer.size() - ptr, 0)) > 0) {
                 ptr += r;
-                auto top = que.front();
-                if (ptr == rd_buffer.size()) {
-                    top.second(rd_buffer.data(), static_cast<int>(ptr), socket, current);
-                    que.pop();
-                    if (!que.empty()) {
-                        top = que.front();
-                        rd_buffer.resize(top.first);
-                        ptr = 0;
+                if (auto top = que.front(); top.first > 0) {
+                    if (ptr == rd_buffer.size()) {
+                        top.second(rd_buffer.data(), static_cast<int>(ptr), socket, current);
+                        que.pop();
+                        if (!que.empty()) {
+                            top = que.front();
+                            rd_buffer.resize(top.first);
+                            ptr = 0;
+                        }
                     }
-                }
-                if (top.first < 0 && ptr >= -top.first) {
-                    size_t len = ptr - ptr % -top.first;
-                    top.second(rd_buffer.data(), static_cast<int>(len), socket, current);
-                    rd_buffer = rd_buffer.substr(len);
-                    ptr %= -top.first;
+                } else {
+                    if (ptr >= -top.first) {
+                        size_t len = ptr - ptr % -top.first;
+                        top.second(rd_buffer.data(), static_cast<int>(len), socket, current);
+                        rd_buffer = rd_buffer.erase(0, len);
+                        rd_buffer.resize(MTU);
+                        ptr %= -top.first;
+                    }
                 }
             }
             return r;
         }
 
-        virtual int sendData(SOCKET socket) {
+        virtual int sendData(const SOCKET socket) {
             int r = 0;
             if (wr_buffer.empty()) return 0;
             if ((r = send(socket, wr_buffer.data(), wr_buffer.size(), 0)) > 0) {
@@ -187,10 +193,19 @@ namespace io {
         atomic_int conn{};
         thread th;
         epoll_event events[1024]{};
-        uint32_t mode;
+
+        void modifySocket(SOCKET socket_fd, const uint32_t m) {
+            epoll_event event{};
+            event.events = m;
+            event.data.fd = socket_fd;
+            if (epoll_ctl(epoll_fd, EPOLL_CTL_MOD, socket_fd, &event) == -1) {
+                cerr << "epoll_ctl modification failed code: " << getErrorCode() << endl;
+                --conn;
+            }
+        }
 
     public:
-        explicit Epoll(uint32_t mode = EPOLLIN) : mode(mode) {
+        explicit Epoll() {
             epoll_fd = epoll_create1(0);
             conn = 0;
         }
@@ -201,23 +216,14 @@ namespace io {
                 th.join();
         }
 
-        void modifySocket(SOCKET socket_fd, const uint32_t m) const {
-            epoll_event event{};
-            event.events = m;
-            event.data.fd = socket_fd;
-            if (epoll_ctl(epoll_fd, EPOLL_CTL_MOD, socket_fd, &event) == -1) {
-                cerr << "epoll_ctl failed" << endl;
-                closesocket(socket_fd);
-                epoll_close(epoll_fd);
-            }
-        }
 
         void syncEpollThread() {
             if (th.joinable())
                 th.join();
             th = thread([&]() {
+                cout << "Creating new Epoll" << endl << flush;
                 while (conn) {
-                    cout << this << "Socket Added " << conn << endl;
+                    cout << this << "Socket Connected " << conn << endl;
                     if (int r = epoll_wait(epoll_fd, events, 1024, -1)) {
                         if (r == -1) {
                             cerr << "epoll_wait failed" << endl;
@@ -240,7 +246,7 @@ namespace io {
                             }
                             if (events[i].events & EPOLLOUT) {
                                 if (current->sendData(events[i].data.fd) == 0) {
-                                    modifySocket(events[i].data.fd, mode);
+                                    modifySocket(events[i].data.fd, EPOLLIN);
                                 }
                             }
                             if (events[i].events & EPOLLHUP) {
@@ -256,12 +262,14 @@ namespace io {
 
         void registerSocket(const SOCKET socket, const shared_ptr<PassiveSocket> &passive) {
             mp[socket] = passive;
+            passive->epoll_fd = epoll_fd;
+            passive->socket_fd = socket;
             epoll_event event{};
-            event.events = mode;
+            event.events = EPOLLIN;
             event.data.fd = socket;
             if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, socket, &event) == -1) {
-                cerr << "epoll_ctl failed" << endl;
-                epoll_close(epoll_fd);
+                cerr << "epoll_ctl adding failed code:" << getErrorCode() << endl;
+                --conn;
                 return;
             }
             if (!conn++) {
@@ -272,8 +280,8 @@ namespace io {
         void unregisterSocket(TcpClient &socket) {
             cout << "Connection closed" << endl;
             if (epoll_ctl(epoll_fd, EPOLL_CTL_DEL, socket.getFD(), nullptr) == -1) {
-                cerr << "epoll_ctl failed" << endl;
-                epoll_close(epoll_fd);
+                cerr << "epoll_ctl deleting failed" << endl;
+                close();
             }
             socket.close();
             if (mp[socket.getFD()] != nullptr) {
@@ -285,8 +293,6 @@ namespace io {
         void close() {
             conn = 0;
             epoll_close(epoll_fd);
-            if (th.joinable())
-                th.join();
         }
     };
 }
