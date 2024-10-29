@@ -65,28 +65,28 @@ namespace crypto {
         for (size_t i = 0; i < length; i++) {
             str[i] = dist(engine);
         }
-        return str;
+        return move(str);
     }
 
     class Crypto {
     public:
         virtual ~Crypto() = default;
 
-        virtual std::string encrypt(std::string &in) const = 0;
+        virtual std::string encrypt(const std::string &in) const = 0;
 
-        virtual std::string decrypt(std::string &in) const = 0;
+        virtual std::string decrypt(const std::string &in) const = 0;
     };
 
     class SymmetricCrypto : public Crypto {
     public:
-        virtual void setKey(std::string &key) = 0;
+        virtual void setKey(const std::string &key) = 0;
     };
 
     class AsymmetricCrypto : public Crypto {
     public:
         virtual void generateKey() = 0;
 
-        virtual void fromPublicKey(std::string &key) = 0;
+        virtual void fromPublicKey(const std::string &key) = 0;
 
         virtual std::string getPublicKey() const = 0;
 
@@ -108,7 +108,7 @@ namespace crypto {
             memcpy(iv, IV, sizeof(iv));
         }
 
-        void setKey(std::string &key) override {
+        void setKey(const std::string &key) override {
             std::hash<std::string> hash_fn;
             engine.seed(hash_fn(key));
             std::uniform_int_distribution<byte> dist;
@@ -120,7 +120,7 @@ namespace crypto {
             }
         }
 
-        std::string encrypt(std::string &in) const override {
+        std::string encrypt(const std::string &in) const override {
             std::string ciphertext;
             EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
             if (!ctx) {
@@ -154,10 +154,10 @@ namespace crypto {
 
             ciphertext.resize(len + padding_len);
             EVP_CIPHER_CTX_free(ctx);
-            return ciphertext;
+            return move(ciphertext);
         }
 
-        std::string decrypt(std::string &in) const override {
+        std::string decrypt(const std::string &in) const override {
             std::string plaintext;
             EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
             if (!ctx) {
@@ -176,7 +176,7 @@ namespace crypto {
             int len;
             plaintext.resize(in.size());
             if (EVP_DecryptUpdate(ctx, reinterpret_cast<byte *>(plaintext.data()), &len,
-                                  reinterpret_cast<byte *>(in.data()), in.size()) != 1) {
+                                  reinterpret_cast<const byte *>(in.data()), in.size()) != 1) {
                 EVP_CIPHER_CTX_free(ctx);
                 throw std::runtime_error("Failed to decrypt data");
             }
@@ -189,7 +189,7 @@ namespace crypto {
 
             plaintext.resize(len + padding_len);
             EVP_CIPHER_CTX_free(ctx);
-            return plaintext;
+            return move(plaintext);
         }
     };
 
@@ -205,7 +205,7 @@ namespace crypto {
 
         AES_CBC(std::string KEY, std::string IV) : key(std::move(KEY)), iv(std::move(IV)) {}
 
-        void setKey(std::string &key) override {
+        void setKey(const std::string &key) override {
             constexpr std::hash<std::string> hash_fn;
             std::mt19937 engine(hash_fn(key));
             std::uniform_int_distribution<char> dist;
@@ -221,10 +221,10 @@ namespace crypto {
 
         std::string encrypt(const AESBlock &in) const {
             auto data = std::string(in.data, sizeof(AESBlock));
-            return encrypt(data);
+            return move(encrypt(data));
         }
 
-        std::string encrypt(std::string &in) const override {
+        std::string encrypt(const std::string &in) const override {
             std::string ciphertext;
             EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
             if (!ctx) {
@@ -256,15 +256,15 @@ namespace crypto {
 
             ciphertext.resize(len + padding_len);
             EVP_CIPHER_CTX_free(ctx);
-            return ciphertext;
+            return move(ciphertext);
         }
 
         std::string decrypt(const AESBlock &in) const {
             auto data = std::string(in.data, sizeof(AESBlock));
-            return decrypt(data);
+            return move(decrypt(data));
         }
 
-        std::string decrypt(std::string &in) const override {
+        std::string decrypt(const std::string &in) const override {
             std::string plaintext;
             EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
             if (!ctx) {
@@ -283,7 +283,7 @@ namespace crypto {
             int len;
             plaintext.resize(in.size());
             if (EVP_DecryptUpdate(ctx, reinterpret_cast<byte *>(plaintext.data()), &len,
-                                  reinterpret_cast<byte *>(in.data()), in.size()) != 1) {
+                                  reinterpret_cast<const byte *>(in.data()), in.size()) != 1) {
                 EVP_CIPHER_CTX_free(ctx);
                 throw std::runtime_error("Failed to decrypt data");
             }
@@ -296,7 +296,7 @@ namespace crypto {
 
             plaintext.resize(len + padding_len);
             EVP_CIPHER_CTX_free(ctx);
-            return plaintext;
+            return move(plaintext);
         }
     };
 
@@ -328,7 +328,7 @@ namespace crypto {
             }
         }
 
-        void fromPublicKey(std::string &key) override {
+        void fromPublicKey(const std::string &key) override {
             release();
             BIO *bio = BIO_new(BIO_s_mem());
             if (!bio) {
@@ -382,7 +382,7 @@ namespace crypto {
             size_t len = BIO_get_mem_data(bio, &key);
             std::string pubkey(key, len);
             BIO_free(bio);
-            return pubkey;
+            return move(pubkey);
         }
 
         std::string getX509PublicKey() const {
@@ -398,7 +398,7 @@ namespace crypto {
             size_t len = BIO_get_mem_data(bio, &key);
             std::string pubkey(key, len);
             BIO_free(bio);
-            return pubkey;
+            return move(pubkey);
         }
 
         std::string getPrivateKey() const override {
@@ -414,10 +414,10 @@ namespace crypto {
             size_t len = BIO_get_mem_data(bio, &key);
             std::string privkey(key, len);
             BIO_free(bio);
-            return privkey;
+            return move(privkey);
         }
 
-        std::string encrypt(std::string &in) const override {
+        std::string encrypt(const std::string &in) const override {
             std::string cipher;
             size_t outlen;
 
@@ -433,7 +433,7 @@ namespace crypto {
                 EVP_PKEY_CTX_free(ctx);
                 throw std::runtime_error("Failed to set rsa padding");
             }
-            if (EVP_PKEY_encrypt(ctx, nullptr, &outlen, reinterpret_cast<byte *>(in.data()), in.size()) <= 0) {
+            if (EVP_PKEY_encrypt(ctx, nullptr, &outlen, reinterpret_cast<const byte *>(in.data()), in.size()) <= 0) {
                 EVP_PKEY_CTX_free(ctx);
                 throw std::runtime_error("Failed to determine buffer length");
             }
@@ -441,15 +441,15 @@ namespace crypto {
             cipher.resize(outlen);
 
             if (EVP_PKEY_encrypt(ctx, reinterpret_cast<byte *>(cipher.data()), &outlen,
-                                 reinterpret_cast<byte *>(in.data()), in.size()) <= 0) {
+                                 reinterpret_cast<const byte *>(in.data()), in.size()) <= 0) {
                 EVP_PKEY_CTX_free(ctx);
                 throw std::runtime_error("Failed to encrypt data");
             }
             EVP_PKEY_CTX_free(ctx);
-            return cipher;
+            return move(cipher);
         }
 
-        std::string decrypt(std::string &in) const override {
+        std::string decrypt(const std::string &in) const override {
             std::string plaintext;
             size_t outlen;
 
@@ -465,7 +465,7 @@ namespace crypto {
                 EVP_PKEY_CTX_free(ctx);
                 throw std::runtime_error("Failed to set rsa padding");
             }
-            if (EVP_PKEY_decrypt(ctx, nullptr, &outlen, reinterpret_cast<byte *>(in.data()), in.size()) <= 0) {
+            if (EVP_PKEY_decrypt(ctx, nullptr, &outlen, reinterpret_cast<const byte *>(in.data()), in.size()) <= 0) {
                 EVP_PKEY_CTX_free(ctx);
                 throw std::runtime_error("Failed to determine buffer length");
             }
@@ -473,12 +473,12 @@ namespace crypto {
             plaintext.resize(outlen);
 
             if (EVP_PKEY_decrypt(ctx, reinterpret_cast<byte *>(plaintext.data()), &outlen,
-                                 reinterpret_cast<byte *>(in.data()), in.size()) <= 0) {
+                                 reinterpret_cast<const byte *>(in.data()), in.size()) <= 0) {
                 EVP_PKEY_CTX_free(ctx);
                 throw std::runtime_error("Failed to decrypt data");
             }
             EVP_PKEY_CTX_free(ctx);
-            return plaintext;
+            return move(plaintext);
         }
     };
 }

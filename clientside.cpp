@@ -11,22 +11,20 @@ using namespace io;
 
 const string ip = "127.0.0.1";
 
-const SHA256Digest userToken = SHA256Digest(sha256_string("libra\n65536forC"));
+const auto userToken = SHA256Digest(sha256_string("libra\n65536forC"));
 
 RSA_PKCS1_OAEP en;
 RSA_PKCS1_OAEP de;
 shared_ptr<AES_CBC> aes;
 
 void handshake(TcpClient &client) {
-    char op = 'O';
-    client.write(op);
+    client.write('O');
     X509PublicKey pkey;
     client.read(pkey);
     en.fromX509PublicKey(pkey);
 
     de.generateKey();
-    pkey = X509PublicKey(de.getX509PublicKey());
-    client.write(pkey);
+    client.write(X509PublicKey(de.getX509PublicKey()));
 
     client.write(userToken);
     int state = 0;
@@ -34,8 +32,7 @@ void handshake(TcpClient &client) {
     if (state) {
         RSABlock rsa_block;
         client.read<RSABlock>(rsa_block);
-        string response(rsa_block.data, 128);
-        string key = de.decrypt(response);
+        string key = de.decrypt(string(rsa_block.data, 128));
         string iv = key.substr(32, 16);
         key = key.substr(0, 32);
         aes = make_shared<AES_CBC>(key, iv);
@@ -46,14 +43,11 @@ void handshake(TcpClient &client) {
 }
 
 TcpClient *openConnection(TcpClient &controlLink, string &addr) {
-    char op = 'O' ^ 1;
-    controlLink.write(op);
+    controlLink.write(static_cast<char>('O' ^ 1));
     controlLink.write(userToken);
-    size_t addrLength = addr.length();
-    string addrCipher(reinterpret_cast<char *>(&addrLength), sizeof(size_t));
-    AESBlock len(aes->encrypt(addrCipher));
+    AESBlock len(aes->encrypt(convertBit(addr.length())));
     controlLink.write(len);
-    controlLink.write(addr, addrLength);
+    controlLink.write(addr, addr.length());
     AESBlock block;
     controlLink.read<AESBlock>(block);
     string portStr = aes->decrypt(block);
@@ -72,7 +66,7 @@ int main() {
     handshake(client);
     client.close();
     const auto server = TcpServer("0.0.0.0", 3000);
-    shared_ptr<Epoll> epoll = make_shared<Epoll>();
+    const auto epoll = make_shared<Epoll>();
     while (true) {
         auto request = shared_ptr<TcpClient>(server.accept());
         string response;

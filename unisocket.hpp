@@ -241,7 +241,7 @@ namespace unisocket {
         }
 
         template<typename T>
-        bool write(T &val) {
+        bool write(T &&val) {
             return write(&val);
         }
 

@@ -48,6 +48,10 @@ namespace io {
     using namespace std;
     using namespace unisocket;
 
+    template<typename T>
+    string convertBit(T &&val) {
+        return move(string(reinterpret_cast<char *>(&val), sizeof(T)));
+    }
 
     class PassiveSocket {
     protected:
@@ -55,6 +59,7 @@ namespace io {
         string wr_buffer;
         size_t ptr = 0;
         queue<pair<long long, function<void(char *, int, SOCKET, shared_ptr<PassiveSocket>)> > > que;
+        vector<function<void(SOCKET, shared_ptr<PassiveSocket>)> > closing;
 
     public:
         HANDLE epoll_fd = nullptr;
@@ -64,6 +69,10 @@ namespace io {
 
         virtual ~PassiveSocket() {
             cout << "Passive Socket deleted " << this << endl;
+        }
+
+        void close(const function<void(SOCKET, shared_ptr<PassiveSocket>)> &func) {
+            closing.emplace_back(func);
         }
 
         template<typename T>
@@ -108,24 +117,24 @@ namespace io {
 
         template<typename T>
         void write(T *val) {
-            write((char *) val, sizeof(T));
+            write(reinterpret_cast<char *>(val), sizeof(T));
         }
 
         template<typename T>
-        void write(T &val) {
+        void write(T &&val) {
             return write(&val);
         }
 
         virtual void copyTo(const shared_ptr<PassiveSocket> &target) {
             while (!que.empty())
                 que.pop();
-            que.emplace(-1, [target](char *buf, const int len, SOCKET, const shared_ptr<PassiveSocket> &) {
+            que.emplace(-1, [target](const char *buf, const int len, SOCKET, const shared_ptr<PassiveSocket> &) {
                 target->write(buf, len);
             });
             rd_buffer.resize(MTU);
         }
 
-        virtual int recvData(SOCKET socket, shared_ptr<PassiveSocket> current) {
+        virtual int recvData(const SOCKET socket, shared_ptr<PassiveSocket> &current) {
             int r = 0;
             if ((r = recv(socket, rd_buffer.data() + ptr, rd_buffer.size() - ptr, 0)) > 0) {
                 ptr += r;
@@ -141,7 +150,7 @@ namespace io {
                     }
                 } else {
                     if (ptr >= -top.first) {
-                        size_t len = ptr - ptr % -top.first;
+                        const size_t len = ptr - ptr % -top.first;
                         top.second(rd_buffer.data(), static_cast<int>(len), socket, current);
                         rd_buffer = rd_buffer.erase(0, len);
                         rd_buffer.resize(MTU);
@@ -161,6 +170,12 @@ namespace io {
             return r;
         }
 
+        virtual void onClose(const SOCKET socket, shared_ptr<PassiveSocket> &current) {
+            for (const auto &func: closing) {
+                func(socket, current);
+            }
+        }
+
         bool empty() const {
             return wr_buffer.empty();
         }
@@ -173,9 +188,9 @@ namespace io {
 
     public:
         explicit PassiveServer(function<void(shared_ptr<TcpClient>, shared_ptr<PassiveSocket>)> proc,
-                               bool singleUse) : func(std::move(proc)), singleUse(singleUse) {}
+                               const bool singleUse) : singleUse(singleUse), func(std::move(proc)) {}
 
-        int recvData(SOCKET socket, shared_ptr<PassiveSocket> current) override {
+        int recvData(const SOCKET socket, shared_ptr<PassiveSocket> &current) override {
             TcpServer server(socket);
             func(shared_ptr<TcpClient>(server.accept()), current);
             if (singleUse) {
@@ -223,7 +238,6 @@ namespace io {
             th = thread([&]() {
                 cout << "Creating new Epoll" << endl << flush;
                 while (conn) {
-                    cout << this << "Socket Connected " << conn << endl;
                     if (int r = epoll_wait(epoll_fd, events, 1024, -1)) {
                         if (r == -1) {
                             cerr << "epoll_wait failed" << endl;
@@ -261,6 +275,7 @@ namespace io {
         }
 
         void registerSocket(const SOCKET socket, const shared_ptr<PassiveSocket> &passive) {
+            cout << this << "Socket Connected " << conn << endl;
             mp[socket] = passive;
             passive->epoll_fd = epoll_fd;
             passive->socket_fd = socket;
@@ -269,7 +284,6 @@ namespace io {
             event.data.fd = socket;
             if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, socket, &event) == -1) {
                 cerr << "epoll_ctl adding failed code:" << getErrorCode() << endl;
-                --conn;
                 return;
             }
             if (!conn++) {
