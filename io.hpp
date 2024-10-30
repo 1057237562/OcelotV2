@@ -192,7 +192,11 @@ namespace io {
 
         int recvData(const SOCKET socket, shared_ptr<PassiveSocket> &current) override {
             TcpServer server(socket);
-            func(shared_ptr<TcpClient>(server.accept()), current);
+            try {
+                func(shared_ptr<TcpClient>(server.accept()), current);
+            } catch (runtime_error &ex) {
+                cerr << ex.what() << endl;
+            }
             if (singleUse) {
                 server.close();
             }
