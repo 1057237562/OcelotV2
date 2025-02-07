@@ -68,7 +68,7 @@ namespace unisocket {
         virtual bool isClosed() = 0;
     };
 
-    inline void copyTo(shared_ptr<NetworkStream> src, shared_ptr<NetworkStream> dest) {
+    inline void copyTo(std::shared_ptr<NetworkStream> src, std::shared_ptr<NetworkStream> dest) {
         std::string buf;
         while (!dest->isClosed() && !src->isClosed() && src->Input(buf)) {
             if (!dest->Output(buf))
