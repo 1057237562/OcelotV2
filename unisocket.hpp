@@ -68,10 +68,10 @@ namespace unisocket {
         virtual bool isClosed() = 0;
     };
 
-    inline void copyTo(std::shared_ptr<NetworkStream> src, std::shared_ptr<NetworkStream> dest) {
+    inline void copyTo(NetworkStream& src, NetworkStream& dest) {
         std::string buf;
-        while (!dest->isClosed() && !src->isClosed() && src->Input(buf)) {
-            if (!dest->Output(buf))
+        while (!dest.isClosed() && !src.isClosed() && src.Input(buf) > 0) {
+            if (!dest.Output(buf))
                 break;
             buf.clear();
         }
@@ -271,6 +271,7 @@ namespace unisocket {
 
         void close() {
             if (!closed) {
+                shutdown(socket_fd, 2);
                 closesocket(socket_fd);
             }
             closed = true;
@@ -357,6 +358,7 @@ namespace unisocket {
 
         void close() {
             if (!closed) {
+                shutdown(socket_fd, 2);
                 closesocket(socket_fd);
             }
             closed = true;

@@ -34,11 +34,11 @@ namespace ocelot {
 
     class OcelotChannel : public NetworkStream {
     protected:
-        TcpClient *socket;
+        TcpClient* socket;
         shared_ptr<AES_CBC> aes;
 
     public:
-        OcelotChannel(TcpClient *client, shared_ptr<AES_CBC> aes)
+        OcelotChannel(TcpClient* client, shared_ptr<AES_CBC> aes)
             : socket(client)
               , aes(std::move(aes)) {}
 
@@ -104,12 +104,12 @@ namespace ocelot {
 
     class OcelotClient {
     protected:
-        TcpClient *socket;
+        TcpClient* socket;
         string usertoken;
         AES_CBC aes;
 
     public:
-        OcelotClient(TcpClient *client, string user, string password)
+        OcelotClient(TcpClient* client, string user, string password)
             : socket(client)
               , usertoken(user + "\n" + password) {}
 
@@ -137,9 +137,9 @@ namespace ocelot {
         }
     };
 
-    inline NetworkAddr parseAddr(shared_ptr<OcelotChannel> client, string &buffer) {
+    inline NetworkAddr parseAddr(OcelotChannel& client, string &buffer) {
         NetworkAddr res = {"", -1};
-        if (!client->read(buffer))
+        if (!client.read(buffer))
             return res;
         switch (buffer[3]) {
             case 0x01:
@@ -271,7 +271,8 @@ namespace ocelot {
                                     return;
                                 }
                                 auto session = &sessions[token];
-                                auto transmit = make_shared<TcpServer>("0.0.0.0", 0);
+                                TcpClient* request = nullptr;
+                                TcpServer* transmit = new TcpServer("0.0.0.0", 0);
                                 int port = transmit->getPort();
                                 string pstr = string((char *) &port, 4);
                                 pstr = session->rsa->encrypt(pstr);
@@ -280,9 +281,6 @@ namespace ocelot {
                                     return;
                                 }
                                 client->close();
-                                bool fastmode = int(op) == 2;
-                                thread th;
-                                TcpClient *request = nullptr;
                                 try {
                                     request = transmit->accept(5);
                                 } catch (...) {
@@ -290,13 +288,15 @@ namespace ocelot {
                                     cout << "Request link handshake failed!" << endl;
                                 }
                                 transmit->close();
+                                delete transmit;
                                 if (request == nullptr) {
                                     return;
                                 }
+                                bool fastmode = int(op) == 2;
+                                thread th;
                                 try {
                                     request->setNoDelay(fastmode);
-                                    auto ocelot =
-                                            make_shared<OcelotChannel>(request, session->aes);
+                                    OcelotChannel ocelot(request, session->aes);
                                     string buffer;
                                     auto addr = parseAddr(ocelot, buffer);
                                     cout << "Fetch ip addr : " << addr.ip << " port :" << addr.
@@ -305,23 +305,27 @@ namespace ocelot {
                                         return;
                                     }
                                     if (fastmode)
-                                        cout << " in fast mode" << endl;
+                                        cout << " in fast mode";
                                     cout << endl;
-                                    auto target = make_shared<TcpClient>(addr.ip, addr.port);
-                                    target->setNoDelay(fastmode);
-                                    target->Output(buffer);
-                                    th = thread([ocelot,target]() {
+                                    TcpClient target(addr.ip, addr.port);
+                                    target.setNoDelay(fastmode);
+                                    target.Output(buffer);
+                                    th = thread([&]() {
                                         try {
                                             copyTo(ocelot, target);
                                         } catch (const runtime_error _) {}
-                                        target->close();
+                                        request->close();
+                                        target.close();
                                     });
                                     try {
                                         copyTo(target, ocelot);
                                     } catch (const runtime_error _) {}
+                                    target.close();
                                     request->close();
                                     cout << "Connection to " << addr.ip << ":" << addr.port <<
                                             " closed" << endl;
+                                    if (th.joinable())
+                                        th.join();
                                 } catch (...) {
                                     cout << "Connection shut unexpectedly!" << endl;
                                 }
