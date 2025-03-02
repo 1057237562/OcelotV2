@@ -68,12 +68,13 @@ namespace unisocket {
         virtual bool isClosed() = 0;
     };
 
-    inline void copyTo(NetworkStream& src, NetworkStream& dest) {
+    inline void copyTo(std::shared_ptr<NetworkStream> src, std::shared_ptr<NetworkStream> dest) {
         std::string buf;
-        while (!dest.isClosed() && !src.isClosed() && src.Input(buf) > 0) {
-            if (!dest.Output(buf))
+        while (!src->isClosed() && src->Input(buf) > 0) {
+            if (dest->isClosed()) return;
+            if (!dest->Output(buf))
                 break;
-            buf.clear();
+            // buf.clear();
         }
     }
 
@@ -181,11 +182,14 @@ namespace unisocket {
         }
 
         int read(std::string &str, int len) {
-            if (!len)
+            if (!len) {
+                str.clear();
                 return true;
+            }
             int bufsize = len, ptr = 0;
-            char buf[bufsize];
-            int ret = recv(socket_fd, buf, bufsize, 0);
+            if(str.size() != bufsize)
+                str.resize(bufsize);
+            int ret = recv(socket_fd, str.data(), bufsize, 0);
             ptr += ret;
             bufsize -= ret;
             while (bufsize) {
@@ -193,11 +197,10 @@ namespace unisocket {
                     close();
                     return 0;
                 }
-                ret = recv(socket_fd, buf + ptr, bufsize, 0);
+                ret = recv(socket_fd, str.data() + ptr, bufsize, 0);
                 ptr += ret;
                 bufsize -= ret;
             }
-            str = std::string(buf, ptr);
             return ptr;
         }
 
@@ -259,7 +262,8 @@ namespace unisocket {
         }
 
         int Input(std::string &buf) override {
-            buf.resize(BUFFER_SIZE);
+            if(buf.size() != BUFFER_SIZE)
+                buf.resize(BUFFER_SIZE);
             int ret = recv(socket_fd, buf.data(), BUFFER_SIZE, 0);
             buf.resize(ret);
             return ret;

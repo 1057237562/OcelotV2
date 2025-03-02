@@ -287,7 +287,7 @@ namespace crypto {
         }
 
         ~RSA_PKCS1_OAEP() override {
-            EVP_PKEY_free(rsa);
+            release();
         }
 
         void release() {
