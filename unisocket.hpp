@@ -142,6 +142,7 @@ namespace unisocket {
 
         template<typename T>
         int read(T *val) {
+            if (isClosed()) return false;
             size_t bufsize = sizeof(T), ptr = 0;
             char buf[bufsize];
             int ret = recv(socket_fd, buf, bufsize, 0);
@@ -182,6 +183,7 @@ namespace unisocket {
         }
 
         int read(std::string &str, int len) {
+            if (isClosed()) return false;
             if (!len) {
                 str.clear();
                 return true;
@@ -206,6 +208,7 @@ namespace unisocket {
 
         template<typename T>
         bool write(T *val) {
+            if (isClosed()) return false;
             int bufsize = sizeof(T), ptr = 0;
             int ret = send(socket_fd, (const char *) val, bufsize, 0);
             bufsize -= ret;
