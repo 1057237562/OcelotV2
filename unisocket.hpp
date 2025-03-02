@@ -226,6 +226,7 @@ namespace unisocket {
         }
 
         bool write(std::string &str, int len) {
+            if (isClosed()) return false;
             if (!len)
                 return true;
             int bufsize = len, ptr = 0;
