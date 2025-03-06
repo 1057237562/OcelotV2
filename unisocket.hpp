@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <string>
 #include <vector>
+#include <atomic>
 #define SOCKET_ERROR (-1)
 
 #ifdef _WIN32
@@ -81,7 +82,7 @@ namespace unisocket {
     class TcpClient : public NetworkStream {
         SOCKET socket_fd;
         sockaddr_in addr;
-        bool closed = false;
+        std::atomic<bool> closed = false;
 
     public:
         TcpClient() { closed = true; }
@@ -125,12 +126,15 @@ namespace unisocket {
             if (!getaddrinfo(ip.c_str(), NULL, &hints, &res)) {
                 serverAddr.sin_addr.s_addr = ((struct sockaddr_in *) res->ai_addr)->sin_addr.s_addr;
                 freeaddrinfo(res);
+            }else{
+                close();
+                std::cerr << "DNS resolver error !" << std::endl;
+                return;
             }
 
             if (connect(socket_fd, (sockaddr *) &serverAddr, sizeof(serverAddr)) == SOCKET_ERROR) {
-                std::cout << "Cannot connect to " + ip + ":" + std::to_string(port) << std::endl;
+                std::cerr << "Cannot connect to " + ip + ":" + std::to_string(port) << std::endl;
                 close();
-                throw std::runtime_error("Connect error !");
                 return;
             }
         }
@@ -278,11 +282,10 @@ namespace unisocket {
         }
 
         void close() {
-            if (!closed) {
+            if (!closed.exchange(true)) {
                 shutdown(socket_fd, 2);
                 closesocket(socket_fd);
             }
-            closed = true;
         }
 
         bool isClosed() override {
@@ -293,7 +296,7 @@ namespace unisocket {
     class TcpServer {
     protected:
         SOCKET socket_fd;
-        bool closed = false;
+        std::atomic<bool> closed = false;
 
     public:
         TcpServer(const std::string ip, const int port) {
@@ -365,11 +368,10 @@ namespace unisocket {
         }
 
         void close() {
-            if (!closed) {
+            if (!closed.exchange(true)) {
                 shutdown(socket_fd, 2);
                 closesocket(socket_fd);
             }
-            closed = true;
         }
     };
 }

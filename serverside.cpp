@@ -31,10 +31,10 @@ int main(int c, char **argv) {
 
     config.close();
 
-    TcpServer server = TcpServer("0.0.0.0", 3060);
+    auto server = make_shared<TcpServer>("0.0.0.0", 3060);
     ocelot::OcelotServer ocelot = ocelot::OcelotServer(server, tokens);
     cout << "Server Started!" << endl;
     ocelot.start();
-    server.close();
+    server->close();
     cout << "Server Down!" << endl;
 }

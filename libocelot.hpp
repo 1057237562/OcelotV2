@@ -177,13 +177,13 @@ namespace ocelot {
             shared_ptr<AES_CBC> aes;
         };
 
-        TcpServer server;
+        shared_ptr<TcpServer> server;
         vector<string> tokens;
         map<string, Session> sessions;
         RSA_PKCS1_OAEP de;
 
     public:
-        OcelotServer(TcpServer server, vector<string> tks)
+        OcelotServer(shared_ptr<TcpServer> server, vector<string> tks)
             : server(server)
               , tokens(tks) {
             de.generateKey();
@@ -192,7 +192,7 @@ namespace ocelot {
 
         void start() {
             while (true) {
-                auto client = shared_ptr<TcpClient>(server.accept());
+                auto client = shared_ptr<TcpClient>(server->accept());
                 client->setRecvTimeout(10);
                 client->setSendTimeout(10);
                 thread handler = thread([this,client]() {
