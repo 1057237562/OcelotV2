@@ -279,6 +279,7 @@ namespace ocelot {
                                     pstr = session->rsa->encrypt(pstr);
                                     if (!client->write(pstr)) {
                                         transmit->close();
+                                        client->close();
                                         return;
                                     }
                                     client->close();
