@@ -196,32 +196,25 @@ namespace ocelot {
                 client->setRecvTimeout(10);
                 client->setSendTimeout(10);
                 thread handler = thread([this,client]() {
-                    while (true) {
+                    char op;
+                    while (client->read(&op)) {
                         try {
-                            char op;
-                            if (!client->read(&op)) {
-                                client->close();
-                                return;
-                            }
                             if (!op) {
                                 string pkey = de.getX509PublicKey();
                                 if (!client->write(pkey)) {
-                                    client->close();
-                                    return;
+                                    break;
                                 }
 
                                 string key, iv;
                                 shared_ptr<RSA_PKCS1_OAEP> en = make_shared<RSA_PKCS1_OAEP>();
                                 if (!client->read(pkey)) {
-                                    client->close();
-                                    return;
+                                    break;
                                 }
                                 en->fromX509PublicKey(pkey);
 
                                 string token;
                                 if (!client->read(token)) {
-                                    client->close();
-                                    return;
+                                    break;
                                 }
                                 token = de.decrypt(token);
                                 token = token.substr(0, strlen(token.data()));
@@ -235,12 +228,10 @@ namespace ocelot {
                                     cout << "Session established with" << endl
                                             << token << endl;
                                     if (!client->write(ekey)) {
-                                        client->close();
-                                        return;
+                                        break;
                                     }
                                     if (!client->write(eiv)) {
-                                        client->close();
-                                        return;
+                                        break;
                                     }
                                 } else {
                                     int st = 0;
@@ -254,8 +245,7 @@ namespace ocelot {
                                     string token;
                                     try {
                                         if (!client->read(token)) {
-                                            client->close();
-                                            return;
+                                            break;
                                         }
                                         token = de.decrypt(token);
                                         token = token.substr(0, strlen(token.data()));
@@ -263,13 +253,12 @@ namespace ocelot {
                                     } catch (...) {
                                         std::cout << "Failed in certificate" << endl;
                                     }
-                                    if (!client->write(&st) || !st) {
-                                        client->close();
-                                        return;
+                                    if (!client->write(&st)) {
+                                        break;
                                     }
+                                    if (!st) continue;
                                     if (sessions.find(token) == sessions.end()) {
-                                        client->close();
-                                        return;
+                                        break;
                                     }
                                     auto session = &sessions[token];
                                     shared_ptr<TcpClient> request = nullptr;
@@ -280,19 +269,17 @@ namespace ocelot {
                                         pstr = session->rsa->encrypt(pstr);
                                         if (!client->write(pstr)) {
                                             transmit->close();
-                                            client->close();
-                                            return;
+                                            break;
                                         }
                                         try {
                                             request = shared_ptr<TcpClient>(transmit->accept(5));
                                         } catch (...) {
-                                            client->close();
                                             cout << "Request link handshake failed!" << endl;
                                         }
                                         transmit->close();
                                     }
                                     if (request == nullptr) {
-                                        return;
+                                        break;
                                     }
                                     bool fastmode = int(op) == 2;
                                     request->setNoDelay(fastmode);
@@ -342,6 +329,7 @@ namespace ocelot {
                             cout << "Client closed without sending any message!" << endl;
                         }
                     }
+                    client->close();
                 });
                 if (handler.joinable())
                     handler.detach();
