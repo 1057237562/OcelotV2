@@ -353,10 +353,9 @@ namespace unisocket {
                 tv.tv_usec = 0;
                 int ret = select(socket_fd + 1, &fds, NULL, NULL, &tv);
                 if (ret == 0) {
-                    return new TcpClient();
+                    return nullptr;
                 } else if (ret == -1) {
-                    throw std::runtime_error("select error");
-                    return new TcpClient();
+                    return nullptr;
                 }
             }
 

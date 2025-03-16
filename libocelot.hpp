@@ -261,34 +261,23 @@ namespace ocelot {
                                         break;
                                     }
                                     auto session = &sessions[token];
-                                    shared_ptr<TcpClient> request = nullptr;
-                                    {
-                                        auto transmit = make_shared<TcpServer>("0.0.0.0", 0);
-                                        int port = transmit->getPort();
-                                        string pstr = string((char *) &port, 4);
-                                        pstr = session->rsa->encrypt(pstr);
-                                        if (!client->write(pstr)) {
-                                            transmit->close();
-                                            break;
-                                        }
-                                        try {
-                                            request = shared_ptr<TcpClient>(transmit->accept(5));
-                                        } catch (...) {
-                                            cout << "Request link handshake failed!" << endl;
-                                        }
+                                    auto transmit = make_shared<TcpServer>("0.0.0.0", 0);
+                                    int port = transmit->getPort();
+                                    string pstr = string((char *) &port, 4);
+                                    pstr = session->rsa->encrypt(pstr);
+                                    if (!client->write(pstr)) {
                                         transmit->close();
-                                    }
-                                    if (request == nullptr) {
                                         break;
                                     }
                                     bool fastmode = int(op) == 2;
-                                    request->setNoDelay(fastmode);
-                                    auto ocelot = make_shared<OcelotChannel>(request, session->aes);
                                     
-                                    thread th = thread([ocelot, request, fastmode]() {
+                                    thread th = thread([fastmode]() {
                                         thread th;
-                                        while (!ocelot->isClosed()) {
+                                        shared_ptr<TcpClient> request;
+                                        while ((request = shared_ptr<TcpClient>(transmit->accept(10))) != nullptr) {
                                             try {
+                                                request->setNoDelay(fastmode);
+                                                auto ocelot = make_shared<OcelotChannel>(request, session->aes);
                                                 string buffer;
                                                 auto addr = parseAddr(ocelot, buffer);
                                                 cout << "Fetch ip addr : " << addr.ip << " port :" << addr.
