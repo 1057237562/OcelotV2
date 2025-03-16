@@ -284,43 +284,47 @@ namespace ocelot {
                                     bool fastmode = int(op) == 2;
                                     request->setNoDelay(fastmode);
                                     auto ocelot = make_shared<OcelotChannel>(request, session->aes);
-                                    try {
-                                        string buffer;
-                                        auto addr = parseAddr(ocelot, buffer);
-                                        cout << "Fetch ip addr : " << addr.ip << " port :" << addr.
-                                                port;
-                                        if (addr.port < 0 || addr.port > 65535 || addr.ip.empty()) {
-                                            return;
-                                        }
-                                        if (fastmode)
-                                            cout << " in fast mode";
-                                        cout << endl;
-                                        auto target = make_shared<TcpClient>(addr.ip, addr.port);
-                                        target->setNoDelay(fastmode);
-                                        target->Output(buffer);
-                                        thread th = thread([ocelot, target, request]() {
+                                    
+                                    thread th = thread([ocelot, request, fastmode]() {
+                                        thread th;
+                                        while (!ocelot->isClosed()) {
                                             try {
-                                                copyTo(ocelot, target);
-                                            } catch (...) {}
-                                            request->close();
-                                            target->close();
-                                        });
-                                        if (th.joinable())
-                                            th.detach();
-                                        th = thread([ocelot, target, request]() {
-                                            try {
-                                                copyTo(target, ocelot);
-                                            } catch (...) {}
-                                            target->close();
-                                            request->close();
-                                        });
-                                        if (th.joinable())
-                                            th.detach();
-                                        cout << "Connection to " << addr.ip << ":" << addr.port <<
+                                                string buffer;
+                                                auto addr = parseAddr(ocelot, buffer);
+                                                cout << "Fetch ip addr : " << addr.ip << " port :" << addr.
+                                                        port;
+                                                if (addr.port < 0 || addr.port > 65535 || addr.ip.empty()) {
+                                                    return;
+                                                }
+                                                if (fastmode)
+                                                    cout << " in fast mode";
+                                                cout << endl;
+                                                auto target = make_shared<TcpClient>(addr.ip, addr.port);
+                                                target->setNoDelay(fastmode);
+                                                target->Output(buffer);
+                                                th = thread([ocelot, target, request]() {
+                                                    try {
+                                                        copyTo(ocelot, target);
+                                                    } catch (...) {}
+                                                    request->close();
+                                                    target->close();
+                                                });
+                                                try {
+                                                    copyTo(target, ocelot);
+                                                } catch (...) {}
+                                                target->close();
+                                                request->close();
+                                                cout << "Connection to " << addr.ip << ":" << addr.port <<
                                                 " closed" << endl;
-                                    } catch (...) {
-                                        cout << "Connection shut unexpectedly!" << endl;
-                                    }
+                                            } catch (...) {
+                                                cout << "Connection shut unexpectedly!" << endl;
+                                            }
+                                            if (th.joinable())
+                                                th.join();
+                                        }
+                                    });
+                                    if (th.joinable())
+                                        th.detach();
                                 } catch (...) {
                                     cout << "Failed to establish connection!" << endl;
                                 }
