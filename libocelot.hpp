@@ -271,10 +271,10 @@ namespace ocelot {
                                     }
                                     bool fastmode = int(op) == 2;
                                     
-                                    thread th = thread([fastmode]() {
+                                    thread th = thread([session, transmit, fastmode]() {
                                         thread th;
                                         shared_ptr<TcpClient> request;
-                                        while ((request = shared_ptr<TcpClient>(transmit->accept(10))) != nullptr) {
+                                        while ((request = shared_ptr<TcpClient>(transmit->accept(60))) != nullptr) {
                                             try {
                                                 request->setNoDelay(fastmode);
                                                 auto ocelot = make_shared<OcelotChannel>(request, session->aes);
