@@ -287,14 +287,14 @@ namespace ocelot {
                                     try {
                                         string buffer;
                                         auto addr = parseAddr(ocelot, buffer);
-                                        cout << "Fetch ip addr : " << addr.ip << " port :" << addr.
-                                                port;
+                                        // cout << "Fetch ip addr : " << addr.ip << " port :" << addr.
+                                        //         port;
                                         if (addr.port < 0 || addr.port > 65535 || addr.ip.empty()) {
                                             return;
                                         }
-                                        if (fastmode)
-                                            cout << " in fast mode";
-                                        cout << endl;
+                                        // if (fastmode)
+                                        //     cout << " in fast mode";
+                                        // cout << endl;
                                         auto target = make_shared<TcpClient>(addr.ip, addr.port);
                                         target->setNoDelay(fastmode);
                                         target->Output(buffer);
@@ -318,15 +318,18 @@ namespace ocelot {
                                             th.detach();
                                         cout << "Connection to " << addr.ip << ":" << addr.port <<
                                                 " closed" << endl;
-                                    } catch (...) {
+                                    } catch (std::exception& e) {
                                         cout << "Connection shut unexpectedly!" << endl;
+                                        cout << e.what() << endl;
                                     }
-                                } catch (...) {
+                                } catch (std::exception& e) {
                                     cout << "Failed to establish connection!" << endl;
+                                    cout << e.what() << endl;
                                 }
                             }
-                        } catch (...) {
+                        } catch (std::exception& e) {
                             cout << "Client closed without sending any message!" << endl;
+                            cout << e.what() << endl;
                         }
                     }
                     client->close();
