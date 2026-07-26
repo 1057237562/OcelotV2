@@ -1,7 +1,10 @@
 *.exe
 
 /.vscode
+/.idea
 
-serverside
+/build
+/build-*
+/cmake-build-*
 
 cfg
