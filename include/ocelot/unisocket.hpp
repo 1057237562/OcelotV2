@@ -21,6 +21,7 @@
 #ifdef _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <mstcpip.h>
 
 #pragma comment(lib, "ws2_32.lib")
 #else
@@ -111,10 +112,55 @@ namespace unisocket {
                           sizeof(flag)) != SOCKET_ERROR;
     }
 
-    inline bool setKeepAlive(const SOCKET fd, const bool on = true) {
+    /// Enables TCP keepalive with a useful failure-detection interval.
+    ///
+    /// Keepalive does not impose an application idle timeout: a healthy
+    /// long-lived connection can remain completely idle indefinitely because
+    /// ACKed probes keep it alive.  It only turns a silently vanished peer
+    /// (power loss, broken NAT, unplugged network) into a socket error.
+    inline bool setKeepAlive(const SOCKET fd, const bool on = true, const int idle_seconds = 60,
+                             const int interval_seconds = 15, const int probe_count = 4) {
         int flag = on ? 1 : 0;
-        return setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, reinterpret_cast<const char *>(&flag),
-                          sizeof(flag)) != SOCKET_ERROR;
+        if (setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, reinterpret_cast<const char *>(&flag),
+                       sizeof(flag)) == SOCKET_ERROR)
+            return false;
+        if (!on)
+            return true;
+
+#ifdef _WIN32
+        tcp_keepalive values{};
+        values.onoff = 1;
+        values.keepalivetime = static_cast<ULONG>(idle_seconds) * 1000;
+        values.keepaliveinterval = static_cast<ULONG>(interval_seconds) * 1000;
+        DWORD returned = 0;
+        // Windows versions supported by this project expose the idle and
+        // interval knobs through SIO_KEEPALIVE_VALS.  The retry count remains
+        // the system default on older Windows releases.
+        return WSAIoctl(fd, SIO_KEEPALIVE_VALS, &values, sizeof(values), nullptr, 0, &returned,
+                        nullptr, nullptr) == 0;
+#else
+        bool ok = true;
+#ifdef TCP_KEEPIDLE
+        ok = setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE, &idle_seconds, sizeof(idle_seconds)) != SOCKET_ERROR && ok;
+#endif
+#ifdef TCP_KEEPINTVL
+        ok = setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, &interval_seconds, sizeof(interval_seconds)) != SOCKET_ERROR
+             && ok;
+#endif
+#ifdef TCP_KEEPCNT
+        ok = setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &probe_count, sizeof(probe_count)) != SOCKET_ERROR && ok;
+#endif
+#ifdef TCP_USER_TIMEOUT
+        // Keepalive covers an idle black hole.  TCP_USER_TIMEOUT covers the
+        // complementary case where data is already outstanding but can no
+        // longer be acknowledged.  Healthy slow/long connections are not
+        // affected as long as the peer keeps acknowledging progress.
+        const int user_timeout_ms = (idle_seconds + interval_seconds * probe_count) * 1000;
+        ok = setsockopt(fd, IPPROTO_TCP, TCP_USER_TIMEOUT, &user_timeout_ms, sizeof(user_timeout_ms)) != SOCKET_ERROR
+             && ok;
+#endif
+        return ok;
+#endif
     }
 
     constexpr int BACKLOG = 1024;
@@ -200,9 +246,11 @@ namespace unisocket {
     public:
         TcpClient() { closed = true; }
 
-        TcpClient(const SOCKET socket_fd, const sockaddr_in addr) : socket_fd(socket_fd), addr(addr) {}
+        TcpClient(const SOCKET socket_fd, const sockaddr_in addr) : socket_fd(socket_fd), addr(addr) {
+            setKeepAlive(socket_fd);
+        }
 
-        explicit TcpClient(const SOCKET socket_fd) : socket_fd(socket_fd) {}
+        explicit TcpClient(const SOCKET socket_fd) : socket_fd(socket_fd) { setKeepAlive(socket_fd); }
 
         TcpClient(const TcpClient &clone) = delete;
 
@@ -236,6 +284,7 @@ namespace unisocket {
             }
             addr = serverAddr;
             unisocket::setNoDelay(socket_fd);
+            unisocket::setKeepAlive(socket_fd);
         }
 
         /// Starts a connect without waiting for the handshake to finish.  The
@@ -254,6 +303,7 @@ namespace unisocket {
 
             setNonBlocking(fd);
             unisocket::setNoDelay(fd);
+            unisocket::setKeepAlive(fd);
 
             sockaddr_in serverAddr{};
             serverAddr.sin_family = AF_INET;
@@ -271,15 +321,25 @@ namespace unisocket {
         SOCKET getFD() const { return socket_fd; }
 
         void setSendTimeout(const int timeout = 5) const {
+#ifdef _WIN32
+            const DWORD ms = static_cast<DWORD>(timeout) * 1000;
+            setsockopt(socket_fd, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char *>(&ms), sizeof(ms));
+#else
             timeval tv{};
             tv.tv_sec = timeout;
-            setsockopt(socket_fd, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<char *>(&tv), sizeof(tv));
+            setsockopt(socket_fd, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char *>(&tv), sizeof(tv));
+#endif
         }
 
         void setRecvTimeout(const int timeout = 5) const {
+#ifdef _WIN32
+            const DWORD ms = static_cast<DWORD>(timeout) * 1000;
+            setsockopt(socket_fd, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char *>(&ms), sizeof(ms));
+#else
             timeval tv{};
             tv.tv_sec = timeout;
-            setsockopt(socket_fd, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<char *>(&tv), sizeof(tv));
+            setsockopt(socket_fd, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char *>(&tv), sizeof(tv));
+#endif
         }
 
         bool setNoDelay(const bool nodelay = true) const { return unisocket::setNoDelay(socket_fd, nodelay); }
@@ -403,6 +463,70 @@ namespace unisocket {
         }
     }
 
+    class UdpSocket {
+        SOCKET socket_fd = INVALID_SOCKET;
+
+    public:
+        UdpSocket(const std::string &ip, const int port = 0) {
+            init();
+            socket_fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+            if (socket_fd == INVALID_SOCKET)
+                throw std::runtime_error("Cannot create UDP socket");
+
+#ifdef _WIN32
+            // Windows otherwise reports a delayed ICMP "port unreachable" as
+            // WSAECONNRESET on a later recvfrom().  For an unconnected SOCKS
+            // relay that error belongs to one destination and must not tear
+            // down the whole UDP association.
+            constexpr DWORD udp_connreset_ioctl = _WSAIOW(IOC_VENDOR, 12);
+            BOOL reset = FALSE;
+            DWORD returned = 0;
+            WSAIoctl(socket_fd, udp_connreset_ioctl, &reset, sizeof(reset), nullptr, 0,
+                     &returned, nullptr, nullptr);
+#endif
+
+            sockaddr_in address{};
+            address.sin_family = AF_INET;
+            address.sin_port = htons(port);
+            if (inet_pton(AF_INET, ip.c_str(), &address.sin_addr) != 1) {
+                close();
+                throw std::runtime_error("Invalid UDP bind address");
+            }
+            if (bind(socket_fd, reinterpret_cast<sockaddr *>(&address), sizeof(address)) == SOCKET_ERROR) {
+                close();
+                throw std::runtime_error("Cannot bind UDP socket");
+            }
+        }
+
+        UdpSocket(const UdpSocket &) = delete;
+
+        UdpSocket &operator=(const UdpSocket &) = delete;
+
+        ~UdpSocket() { close(); }
+
+        SOCKET getFD() const { return socket_fd; }
+
+        int getPort() const {
+            sockaddr_in address{};
+            socklen_t length = sizeof(address);
+            if (getsockname(socket_fd, reinterpret_cast<sockaddr *>(&address), &length) == SOCKET_ERROR)
+                throw std::runtime_error("Cannot read UDP socket address");
+            return ntohs(address.sin_port);
+        }
+
+        SOCKET release() {
+            const SOCKET fd = socket_fd;
+            socket_fd = INVALID_SOCKET;
+            return fd;
+        }
+
+        void close() {
+            if (socket_fd != INVALID_SOCKET)
+                closesocket(socket_fd);
+            socket_fd = INVALID_SOCKET;
+        }
+    };
+
     class TcpServer {
     protected:
         SOCKET socket_fd;
@@ -424,14 +548,23 @@ namespace unisocket {
 
             int on = 1;
             if (setsockopt(socket_fd, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char *>(&on),
-                           sizeof(on)) == SOCKET_ERROR)
+                           sizeof(on)) == SOCKET_ERROR) {
+                closesocket(socket_fd);
+                socket_fd = INVALID_SOCKET;
                 throw std::runtime_error("Can't setsockopt");
+            }
 
-            if (bind(socket_fd, reinterpret_cast<sockaddr *>(&server_addr), sizeof(server_addr)) == SOCKET_ERROR)
+            if (bind(socket_fd, reinterpret_cast<sockaddr *>(&server_addr), sizeof(server_addr)) == SOCKET_ERROR) {
+                closesocket(socket_fd);
+                socket_fd = INVALID_SOCKET;
                 throw std::runtime_error("bind error");
+            }
 
-            if (listen(socket_fd, backlog) == SOCKET_ERROR)
+            if (listen(socket_fd, backlog) == SOCKET_ERROR) {
+                closesocket(socket_fd);
+                socket_fd = INVALID_SOCKET;
                 throw std::runtime_error("listen error");
+            }
         }
 
         SOCKET getFD() const { return socket_fd; }

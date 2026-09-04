@@ -116,7 +116,7 @@ namespace crypto {
         void setKey(const std::string &key) override {
             std::hash<std::string> hash_fn;
             engine.seed(hash_fn(key));
-            std::uniform_int_distribution<byte> dist;
+            std::uniform_int_distribution<int> dist(0, 255);
             for (byte &i: this->key) {
                 i = dist(engine);
             }
@@ -213,7 +213,7 @@ namespace crypto {
         void setKey(const std::string &key) override {
             constexpr std::hash<std::string> hash_fn;
             std::mt19937 engine(hash_fn(key));
-            std::uniform_int_distribution<char> dist;
+            std::uniform_int_distribution<int> dist(0, 255);
             this->key.resize(32);
             this->iv.resize(16);
             for (int i = 0; i < 32; i++) {

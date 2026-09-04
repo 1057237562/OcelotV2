@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(Ocelot CXX)
+project(Ocelot C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -24,8 +24,8 @@ add_library(ocelot INTERFACE)
 target_include_directories(ocelot INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(ocelot INTERFACE OpenSSL::SSL OpenSSL::Crypto Threads::Threads)
 if (WIN32)
-    target_sources(ocelot INTERFACE src/wepoll.c)
-    target_link_libraries(ocelot INTERFACE wsock32 ws2_32)
+    add_library(wepoll STATIC src/wepoll.c)
+    target_link_libraries(ocelot INTERFACE wepoll wsock32 ws2_32)
 endif ()
 
 add_executable(OcelotServer src/serverside.cpp ${OCELOT_HEADERS})
@@ -37,6 +37,10 @@ target_link_libraries(OcelotClient PRIVATE ocelot)
 add_executable(HandshakeBench tests/handshake_bench.cpp ${OCELOT_HEADERS})
 target_link_libraries(HandshakeBench PRIVATE ocelot)
 
+add_executable(SocketLifecycleTest tests/socket_lifecycle_test.cpp ${OCELOT_HEADERS})
+target_link_libraries(SocketLifecycleTest PRIVATE ocelot)
+
 enable_testing()
+add_test(NAME socket_lifecycle COMMAND SocketLifecycleTest)
 add_test(NAME smoke
         COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/smoke_test.sh $<TARGET_FILE:OcelotServer> $<TARGET_FILE:OcelotClient>)

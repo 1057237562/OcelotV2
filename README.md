@@ -69,10 +69,10 @@ Set `OCELOT_LOG=3` for debug logging (default is warnings and errors only).
 ./tests/smoke_test.sh ./build/OcelotServer ./build/OcelotClient
 ```
 
-Covers SOCKS5 by IP and by hostname, SOCKS4, HTTP CONNECT, a multi-megabyte
-transfer checked byte for byte, sequential and concurrent load, an abandoned
-client, and an unreachable destination — then verifies neither process died or
-started spinning.
+Covers SOCKS5 TCP and UDP (IPv4 and hostname destinations), SOCKS4, HTTP
+CONNECT, a multi-megabyte transfer checked byte for byte, sequential and
+concurrent load, an abandoned client, and an unreachable destination — then
+verifies neither process died or started spinning.
 
 ## Wire format
 
@@ -82,6 +82,7 @@ Control link (client → server), one long-lived connection per client:
 |-------------|-----------------------------------------------------------------|
 | `'O'`       | RSA-1024 key swap, SHA-256 credential check, AES session key    |
 | `'O' ^ 1`   | token, `AES(uint32 len)`, `AES(socks5 address)` → `AES(uint32 port)` |
+| `'O' ^ 2`   | token → `AES(uint32 port)` for a SOCKS5 UDP association         |
 
 A port of `0` means the request failed. The client then connects to the returned
 port and both ends speak the tunnel format:
@@ -90,3 +91,7 @@ port and both ends speak the tunnel format:
 [16] AES(uint32 body_length)
 [n ] AES(payload)
 ```
+
+For UDP associations, each encrypted payload is exactly one complete SOCKS5
+UDP datagram. The TCP connection accepted on the returned port preserves frame
+boundaries and controls the lifetime of the server-side UDP socket.

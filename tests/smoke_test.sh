@@ -11,6 +11,7 @@ SERVER_BIN="${1:-./build/OcelotServer}"
 CLIENT_BIN="${2:-./build/OcelotClient}"
 
 ORIGIN_PORT=18080
+UDP_ORIGIN_PORT=18081
 OCELOT_PORT=12080
 PROXY_PORT=13000
 
@@ -58,6 +59,9 @@ head -c 3000000 /dev/urandom > "$WORK/www/big.bin"
 PIDS+=($!)
 wait_for_port "$ORIGIN_PORT" || { echo "origin server did not start"; exit 1; }
 
+python3 "$(dirname "$0")/udp_echo.py" "$UDP_ORIGIN_PORT" >/dev/null 2>&1 &
+PIDS+=($!)
+
 "$SERVER_BIN" --port "$OCELOT_PORT" --cores 2 > "$WORK/server.log" 2>&1 &
 SERVER_PID=$!
 PIDS+=($SERVER_PID)
@@ -83,6 +87,11 @@ check "socks4" "hello-through-the-tunnel" \
 
 check "http connect" "hello-through-the-tunnel" \
     "$(curl -s --max-time 20 -p -x "http://127.0.0.1:$PROXY_PORT" "http://127.0.0.1:$ORIGIN_PORT/hello.txt")"
+
+# SOCKS5 UDP ASSOCIATE: keep the TCP lifetime connection open, send one UDP
+# request through the returned relay endpoint and validate the wrapped reply.
+udp_result=$(python3 "$(dirname "$0")/udp_associate_test.py" "$PROXY_PORT" "$UDP_ORIGIN_PORT")
+check "socks5 UDP associate" "udp-through-the-tunnel" "$udp_result"
 
 # Large transfer: exercises multi-frame relaying, partial sends and flow control.
 curl -s --max-time 60 --socks5 127.0.0.1:$PROXY_PORT \

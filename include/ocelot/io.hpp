@@ -5,6 +5,7 @@
 #include "unisocket.hpp"
 
 #include <atomic>
+#include <chrono>
 #include <cstring>
 #include <functional>
 #include <memory>
@@ -12,6 +13,7 @@
 #include <queue>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -43,6 +45,16 @@ namespace io {
     /// Compact the write buffer once this many bytes at its head have been
     /// sent, instead of memmoving after every partial send.
     constexpr size_t WRITE_COMPACT_THRESHOLD = 64 * 1024;
+
+    /// A full-duplex long connection has no application idle timeout.  This
+    /// timeout begins only after one direction has received FIN.  Any further
+    /// bytes in the remaining direction refresh it, so large/slow responses
+    /// continue normally while abandoned half-closed tunnels are reclaimed.
+    constexpr auto HALF_CLOSE_IDLE_TIMEOUT = chrono::minutes(5);
+
+    inline long long monotonicMilliseconds() {
+        return chrono::duration_cast<chrono::milliseconds>(chrono::steady_clock::now().time_since_epoch()).count();
+    }
 
     template<typename T>
     string convertBit(T &&val) {
@@ -76,6 +88,11 @@ namespace io {
         bool want_shutdown_write = false; ///< send FIN as soon as the buffer drains
         bool read_paused = false; ///< peer's write backlog is too large
         bool dead = false;
+
+        /// Zero means no lifetime policy.  A positive expiry_period_ms makes
+        /// the deadline activity-based; fixed deadlines leave the period at 0.
+        atomic_llong expiry_at_ms{0};
+        atomic_llong expiry_period_ms{0};
 
     public:
         HANDLE epoll_fd = 0;
@@ -165,8 +182,14 @@ namespace io {
             while (!que.empty())
                 que.pop();
             ptr = 0;
-            que.emplace(-1, [target](const char *buf, const int len, SOCKET, const shared_ptr<PassiveSocket> &) {
-                target->write(buf, len);
+            // The handler lives inside this socket.  Capturing target strongly
+            // here would make two linked relay handlers own each other forever
+            // after both descriptors had been removed from epoll.
+            const weak_ptr<PassiveSocket> weak_target = target;
+            que.emplace(-1, [weak_target](const char *buf, const int len, SOCKET,
+                                          const shared_ptr<PassiveSocket> &) {
+                if (const auto target = weak_target.lock())
+                    target->write(buf, len);
             });
         }
 
@@ -177,6 +200,33 @@ namespace io {
         bool empty() const { return !pendingOutput(); }
 
         bool isDead() const { return dead; }
+
+        /// Fixed lifetime, used by a one-shot listener while it waits for the
+        /// client to connect.  Socket activity does not extend this deadline.
+        void expireAfter(const chrono::milliseconds timeout) {
+            expiry_period_ms.store(0);
+            expiry_at_ms.store(monotonicMilliseconds() + timeout.count());
+        }
+
+        /// Inactivity lifetime, used only once a tunnel has become half-closed.
+        void expireWhenIdleFor(const chrono::milliseconds timeout) {
+            expiry_period_ms.store(timeout.count());
+            expiry_at_ms.store(monotonicMilliseconds() + timeout.count());
+        }
+
+        void clearExpiry() {
+            expiry_at_ms.store(0);
+            expiry_period_ms.store(0);
+        }
+
+        /// Stops accepting input, flushes any reply already queued, sends FIN
+        /// and lets settle() retire the descriptor.  Protocol handlers use
+        /// this when a stream can no longer be parsed safely.
+        void closeAfterWrite() {
+            read_closed = true;
+            want_shutdown_write = true;
+            updateInterest();
+        }
 
         /// @return 1 keep going, 0 peer closed cleanly, -1 fatal error.
         virtual int recvData(const SOCKET socket, const shared_ptr<PassiveSocket> &current) {
@@ -199,6 +249,7 @@ namespace io {
                 if (r < 0)
                     return wouldBlock() ? 1 : -1;
 
+                noteActivity();
                 ptr += static_cast<size_t>(r);
                 consume(socket, current);
                 if (dead || read_closed)
@@ -217,6 +268,7 @@ namespace io {
             while (wr_ptr < wr_buffer.size()) {
                 const int r = send(socket, wr_buffer.data() + wr_ptr, wr_buffer.size() - wr_ptr, SEND_FLAGS);
                 if (r > 0) {
+                    noteActivity();
                     wr_ptr += static_cast<size_t>(r);
                     continue;
                 }
@@ -263,6 +315,23 @@ namespace io {
         }
 
     protected:
+        bool expiryReached(const long long now_ms) const {
+            const long long deadline = expiry_at_ms.load();
+            return deadline > 0 && now_ms >= deadline;
+        }
+
+        void noteActivity() {
+            const long long now = monotonicMilliseconds();
+            const long long period = expiry_period_ms.load();
+            if (period > 0)
+                expiry_at_ms.store(now + period);
+            if (const auto p = peer.lock()) {
+                const long long peer_period = p->expiry_period_ms.load();
+                if (peer_period > 0)
+                    p->expiry_at_ms.store(now + peer_period);
+            }
+        }
+
         size_t desiredReadSize() const {
             const long long want = que.front().first;
             return want > 0 ? static_cast<size_t>(want) : IO_BUFFER;
@@ -365,6 +434,9 @@ namespace io {
         atomic_bool running{true};
         thread th;
         epoll_event events[1024]{};
+        mutex registered_mutex;
+        unordered_map<SOCKET, weak_ptr<PassiveSocket> > registered;
+        chrono::steady_clock::time_point next_expiry_scan = chrono::steady_clock::now();
 
     public:
         Epoll() {
@@ -391,14 +463,40 @@ namespace io {
             running = false;
             if (th.joinable())
                 th.join();
+
+            // mp[] is the primary owner of registered PassiveSocket objects.
+            // Closing only the epoll handle leaves those entries, their file
+            // descriptors and all queued buffers alive when an Epoll instance
+            // is stopped before process exit.
+            vector<pair<SOCKET, shared_ptr<PassiveSocket> > > remaining;
+            {
+                lock_guard<mutex> lk(registered_mutex);
+                remaining.reserve(registered.size());
+                for (const auto &[fd, weak]: registered) {
+                    if (const auto socket = weak.lock())
+                        remaining.emplace_back(fd, socket);
+                }
+            }
+            for (const auto &[fd, expected]: remaining) {
+                if (getSocket(fd) == expected)
+                    destroySocket(fd);
+            }
             epoll_close(epoll_fd);
         }
 
         int connections() const { return conn.load(); }
 
         void registerSocket(const SOCKET socket, const shared_ptr<PassiveSocket> &passive) {
-            if (socket < 0 || static_cast<size_t>(socket) >= FD_MAX) {
+            if (socket < 0) {
                 LOG_ERROR("refusing to register out-of-range fd %d", socket);
+                return;
+            }
+            if (static_cast<size_t>(socket) >= FD_MAX) {
+                // Ownership has already been transferred by TcpClient::release
+                // at every call site, so refusing registration must also close
+                // the descriptor or fd exhaustion turns into a permanent leak.
+                LOG_ERROR("refusing to register out-of-range fd %d", socket);
+                closesocket(socket);
                 return;
             }
             // Blocking sockets in an epoll loop are a latency trap: one large
@@ -412,6 +510,10 @@ namespace io {
             passive->interest = EPOLLIN | EPOLLRDHUP;
             // Publish the slot before the fd can produce events.
             setSocket(socket, passive);
+            {
+                lock_guard<mutex> lk(registered_mutex);
+                registered[socket] = passive;
+            }
 
             epoll_event event{};
             event.events = passive->interest;
@@ -419,6 +521,10 @@ namespace io {
             if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, socket, &event) == -1) {
                 LOG_ERROR("epoll_ctl(ADD) failed on fd %d: %d", socket, getErrorCode());
                 setSocket(socket, nullptr);
+                {
+                    lock_guard<mutex> lk(registered_mutex);
+                    registered.erase(socket);
+                }
                 passive->socket_fd = INVALID_SOCKET;
                 closesocket(socket);
                 return;
@@ -439,6 +545,10 @@ namespace io {
 
             current->dead = true;
             setSocket(fd, nullptr);
+            {
+                lock_guard<mutex> lk(registered_mutex);
+                registered.erase(fd);
+            }
             current->onClose(fd, current);
 
             if (epoll_ctl(epoll_fd, EPOLL_CTL_DEL, fd, nullptr) == -1)
@@ -452,9 +562,15 @@ namespace io {
                 // nowhere to read to; let it flush what it already holds.
                 p->read_closed = true;
                 p->want_shutdown_write = true;
-                if (p->pendingOutput())
+                if (p->pendingOutput()) {
+                    // Abnormal termination can strand a large buffered tail
+                    // against a peer that also vanished or stopped reading.
+                    // Progress refreshes this deadline in sendData(); a stuck
+                    // send is eventually reclaimed without limiting healthy
+                    // full-duplex long connections.
+                    p->expireWhenIdleFor(chrono::duration_cast<chrono::milliseconds>(HALF_CLOSE_IDLE_TIMEOUT));
                     p->updateInterest();
-                else
+                } else
                     destroySocket(p->socket_fd);
             }
         }
@@ -465,8 +581,10 @@ namespace io {
         /// closing both immediately truncates the tail of every response.
         void handleReadEof(const SOCKET fd, const shared_ptr<PassiveSocket> &s) {
             s->read_closed = true;
+            s->expireWhenIdleFor(chrono::duration_cast<chrono::milliseconds>(HALF_CLOSE_IDLE_TIMEOUT));
             const auto p = s->peer.lock();
             if (p && !p->dead) {
+                p->expireWhenIdleFor(chrono::duration_cast<chrono::milliseconds>(HALF_CLOSE_IDLE_TIMEOUT));
                 p->want_shutdown_write = true;
                 settle(p->socket_fd, p);
             }
@@ -504,6 +622,39 @@ namespace io {
                 }
             }
             s->updateInterest();
+        }
+
+        /// Retires fixed-deadline listeners and inactive half-closed tunnels.
+        /// The registry is per Epoll instance, so one worker can never close a
+        /// descriptor owned by another worker.  Scanning once per second keeps
+        /// timeout handling cheap without requiring a timer thread per socket.
+        void expireSockets() {
+            const auto now = chrono::steady_clock::now();
+            if (now < next_expiry_scan)
+                return;
+            next_expiry_scan = now + chrono::seconds(1);
+
+            const long long now_ms = monotonicMilliseconds();
+            vector<pair<SOCKET, shared_ptr<PassiveSocket> > > expired;
+            {
+                lock_guard<mutex> lk(registered_mutex);
+                for (auto it = registered.begin(); it != registered.end();) {
+                    const auto socket = it->second.lock();
+                    if (!socket) {
+                        it = registered.erase(it);
+                        continue;
+                    }
+                    if (socket->expiryReached(now_ms))
+                        expired.emplace_back(it->first, socket);
+                    ++it;
+                }
+            }
+            for (const auto &[fd, expected]: expired) {
+                if (getSocket(fd) == expected) {
+                    LOG_INFO("socket %d expired and will be closed", fd);
+                    destroySocket(fd);
+                }
+            }
         }
 
         void loop() {
@@ -561,6 +712,7 @@ namespace io {
                     if (const auto p = current->peer.lock(); p && !p->dead)
                         settle(p->socket_fd, p);
                 }
+                expireSockets();
             }
             LOG_INFO("epoll %p thread exiting", static_cast<void *>(this));
         }

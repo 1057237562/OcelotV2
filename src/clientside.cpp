@@ -1,6 +1,8 @@
 #include <cstdlib>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <vector>
 
 #include "ocelot/libocelot.hpp"
 #include "ocelot/logging.hpp"
@@ -25,6 +27,66 @@ namespace {
 
     shared_ptr<AES_CBC> aes;
     unique_ptr<TcpClient> control;
+
+    /// Coordinates the three descriptors of a SOCKS5 UDP association (its TCP
+    /// lifetime connection, local UDP socket and encrypted TCP tunnel).  Close
+    /// events may arrive while they are being registered, so activation is a
+    /// small barrier: an early event is remembered and dispatched afterwards.
+    class SocketGroup {
+        mutex guard;
+        bool active = false;
+        bool closing = false;
+        bool dispatched = false;
+        weak_ptr<Epoll> loop;
+        vector<weak_ptr<PassiveSocket> > sockets;
+
+        void dispatch(vector<shared_ptr<PassiveSocket> > members, const shared_ptr<Epoll> &epoll) {
+            if (!epoll)
+                return;
+            for (const auto &socket: members)
+                epoll->destroySocket(socket->socket_fd);
+        }
+
+    public:
+        SocketGroup(const shared_ptr<Epoll> &epoll, const vector<shared_ptr<PassiveSocket> > &members)
+            : loop(epoll), sockets(members.begin(), members.end()) {}
+
+        void requestClose() {
+            vector<shared_ptr<PassiveSocket> > members;
+            shared_ptr<Epoll> epoll;
+            {
+                lock_guard<mutex> lock(guard);
+                closing = true;
+                if (!active || dispatched)
+                    return;
+                dispatched = true;
+                epoll = loop.lock();
+                for (const auto &socket: sockets) {
+                    if (const auto member = socket.lock())
+                        members.emplace_back(member);
+                }
+            }
+            dispatch(std::move(members), epoll);
+        }
+
+        void activate() {
+            vector<shared_ptr<PassiveSocket> > members;
+            shared_ptr<Epoll> epoll;
+            {
+                lock_guard<mutex> lock(guard);
+                active = true;
+                if (!closing || dispatched)
+                    return;
+                dispatched = true;
+                epoll = loop.lock();
+                for (const auto &socket: sockets) {
+                    if (const auto member = socket.lock())
+                        members.emplace_back(member);
+                }
+            }
+            dispatch(std::move(members), epoll);
+        }
+    };
 
     /// Authenticates and derives the session key.  The same connection then
     /// stays open as the control link.
@@ -128,11 +190,38 @@ namespace {
         return 0;
     }
 
+    int openUdpTunnel() {
+        for (int attempt = 0; attempt < 2; ++attempt) {
+            if (!ensureControl())
+                return 0;
+            AESBlock answer;
+            if (control->write(static_cast<char>('O' ^ 2))
+                && control->write(userToken)
+                && control->read<AESBlock>(answer)) {
+                try {
+                    const string portStr = aes->decrypt(answer);
+                    if (portStr.size() >= sizeof(uint32_t)) {
+                        uint32_t port;
+                        memcpy(&port, portStr.data(), sizeof(port));
+                        return static_cast<int>(port);
+                    }
+                } catch (const runtime_error &e) {
+                    LOG_WARN("cannot decrypt the UDP relay answer: %s", e.what());
+                }
+                return 0;
+            }
+            LOG_WARN("control link lost while opening UDP relay, reconnecting");
+            control.reset();
+        }
+        return 0;
+    }
+
     /// Reads the local application's proxy greeting and returns the destination
     /// as a SOCKS5 address block.  `leftover` receives any bytes that were read
     /// past the end of the greeting, which must still reach the destination.
-    string intercept(const shared_ptr<TcpClient> &request, string &leftover) {
-        switch (certificate(request)) {
+    string intercept(const shared_ptr<TcpClient> &request, string &leftover, int &dialect) {
+        dialect = certificate(request);
+        switch (dialect) {
             case 5:
                 return interceptSocks5(request);
             case 4: {
@@ -185,6 +274,8 @@ int main(const int argc, char **argv) {
     }
 
     init();
+    printf("Ocelot client connecting to %s:%d\n", serverIp.c_str(), serverPort);
+    fflush(stdout);
     if (!ensureControl()) {
         LOG_ERROR("Cannot establish a session with %s:%d", serverIp.c_str(), serverPort);
         return 1;
@@ -213,13 +304,81 @@ int main(const int argc, char **argv) {
         request->setSendTimeout(GREETING_TIMEOUT_SECONDS);
 
         string leftover;
-        const string address = intercept(request, leftover);
-        if (address.empty())
+        int dialect = 0;
+        const string address = intercept(request, leftover, dialect);
+        if (address.empty()) {
+            if (dialect == 5) {
+                const string reply = socks5Reply(0x08);
+                request->write(reply.data(), static_cast<int>(reply.size()));
+            }
             continue;
+        }
+
+        if (dialect == 5 && address.size() >= 2 && static_cast<protocol::byte>(address[1]) == 0x03) {
+            const int port = openUdpTunnel();
+            if (port <= 0 || port > 65535) {
+                const string reply = socks5Reply(0x01);
+                request->write(reply.data(), static_cast<int>(reply.size()));
+                continue;
+            }
+
+            shared_ptr<TcpClient> tunnel;
+            unique_ptr<UdpSocket> udp;
+            try {
+                tunnel = make_shared<TcpClient>(serverIp, port);
+                udp = make_unique<UdpSocket>("0.0.0.0", 0);
+            } catch (const runtime_error &e) {
+                LOG_WARN("cannot establish UDP relay: %s", e.what());
+                const string reply = socks5Reply(0x01);
+                request->write(reply.data(), static_cast<int>(reply.size()));
+                continue;
+            }
+
+            sockaddr_in local{};
+            socklen_t local_length = sizeof(local);
+            uint32_t reply_ip = htonl(INADDR_LOOPBACK);
+            if (getsockname(request->getFD(), reinterpret_cast<sockaddr *>(&local), &local_length) == 0
+                && local.sin_addr.s_addr != htonl(INADDR_ANY))
+                reply_ip = local.sin_addr.s_addr;
+            const string reply = socks5Reply(0x00, reply_ip, static_cast<uint16_t>(udp->getPort()));
+            if (!request->write(reply.data(), static_cast<int>(reply.size())))
+                continue;
+
+            const auto association = make_shared<ocelot::PassiveUdpAssociationControl>();
+            const auto local_udp = make_shared<ocelot::PassiveLocalUdp>();
+            const auto channel = make_shared<ocelot::PassiveUdpChannel>(aes);
+            channel->copyTo(local_udp);
+            PassiveSocket::link(local_udp, channel);
+
+            const vector<shared_ptr<PassiveSocket> > members{association, local_udp, channel};
+            const auto group = make_shared<SocketGroup>(epoll, members);
+            for (const auto &member: members) {
+                member->close([group](SOCKET, const shared_ptr<PassiveSocket> &) { group->requestClose(); });
+            }
+
+            epoll->registerSocket(udp->release(), local_udp);
+            epoll->registerSocket(tunnel->release(), channel);
+            epoll->registerSocket(request->release(), association);
+            group->activate();
+            if (local_udp->socket_fd == INVALID_SOCKET || channel->socket_fd == INVALID_SOCKET
+                || association->socket_fd == INVALID_SOCKET)
+                group->requestClose();
+            continue;
+        }
+
+        if (dialect == 5 && (address.size() < 2 || static_cast<protocol::byte>(address[1]) != 0x01)) {
+            const string reply = socks5Reply(0x07);
+            request->write(reply.data(), static_cast<int>(reply.size()));
+            continue;
+        }
 
         const int port = openConnection(address);
         if (port <= 0 || port > 65535) {
             LOG_WARN("server refused the relay request");
+            if (dialect == 5) {
+                const string reply = socks5Reply(0x01);
+                request->write(reply.data(), static_cast<int>(reply.size()));
+            }
             continue;
         }
 
@@ -228,7 +387,17 @@ int main(const int argc, char **argv) {
             conn = shared_ptr<TcpClient>(new TcpClient(serverIp, port));
         } catch (const runtime_error &e) {
             LOG_WARN("cannot reach the relay port: %s", e.what());
+            if (dialect == 5) {
+                const string reply = socks5Reply(0x01);
+                request->write(reply.data(), static_cast<int>(reply.size()));
+            }
             continue;
+        }
+
+        if (dialect == 5) {
+            const string reply = socks5Reply(0x00);
+            if (!request->write(reply.data(), static_cast<int>(reply.size())))
+                continue;
         }
 
         const auto passive = make_shared<PassiveSocket>();
